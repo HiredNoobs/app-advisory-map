@@ -1,0 +1,65 @@
+name: Release Docker Image
+
+# A version tag (e.g. 0.1.0, or 0.1.0-rc1 for a release candidate) builds and pushes
+# hirednoobs/advisory-map:<tag>, after the tests pass. The Docker Hub credentials are secrets of the
+# release environment, which only tags matching the patterns below can deploy to; who can create
+# those tags is set by the repository's tag ruleset.
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
+
+permissions:
+  contents: read
+
+# One release at a time; a second tag waits rather than racing the first.
+concurrency:
+  group: docker-release
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  build-and-push:
+    needs: tests
+    runs-on: ubuntu-latest
+    environment: release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build Docker image
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          docker build -t "hirednoobs/advisory-map:${VERSION}" .
+
+      - name: Check the image
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          docker run --rm --entrypoint python "hirednoobs/advisory-map:${VERSION}" -c "import advisory_map.app"
+
+      # docker login straight from the secrets (no third-party action handles the token).
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Push the image
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          docker push "hirednoobs/advisory-map:${VERSION}"
+          docker inspect --format '{{index .RepoDigests 0}}' "hirednoobs/advisory-map:${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of Docker Hub
+        if: always()
+        run: docker logout

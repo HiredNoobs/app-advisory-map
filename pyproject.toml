@@ -1,0 +1,45 @@
+[project]
+name = "advisory-map"
+version = "0.1.0"
+requires-python = ">=3.14.3"
+description = "Matches the package versions in Prometheus against vulnerability advisories, as Prometheus metrics"
+readme = "README.md"
+
+dependencies = [
+    "prometheus-client==0.26.0",
+    "python-debian==1.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black==26.3.1",
+    "isort==8.0.1",
+    "flake8==7.3.0",
+    "Flake8-pyproject==1.2.4",
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "mypy==1.20.2",
+]
+
+[tool.flake8]
+extend-ignore = ["E203", "E501", "W503"]
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+line-length = 120
+
+[tool.mypy]
+python_version = "3.14"
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[project.scripts]
+advisory-map = "advisory_map.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
