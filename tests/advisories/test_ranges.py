@@ -71,6 +71,11 @@ def test_unparsable(version: str) -> None:
             Range("v1.22.0", True, "v1.22.14", False),
         ),
         ({"version": "longhorn", "lessThan": "1.1.3", "status": "affected"}, Range(None, True, "1.1.3", False)),
+        # A release line starts at its first version.
+        (
+            {"version": "10.4.x", "lessThan": "10.4.19+security-01", "status": "affected"},
+            Range("10.4", True, "10.4.19+security-01", False),
+        ),
         # A JSON escape left in the record's text.
         (
             {"version": "11.0.0", "lessThan": "11.0.5\\+security-01", "status": "affected"},
