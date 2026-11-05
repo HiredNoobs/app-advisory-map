@@ -95,8 +95,10 @@ Meanwhile the findings of what's still mapped stay, from the records already rea
 ## Versions
 
 Versions are compared as most projects number them: `1.2.3-rc.1` < `1.2.3` < `1.2.10`, with a leading
-`v` and `+build` metadata ignored. A range that can't be compared isn't guessed at: it's counted in
-`advisory_map_unmatched_records` by reason:
+`v` and `+build` metadata ignored. Besides CVE JSON 5's fields, a CVE record's range can be GitHub's
+constraints (`>= 1.0.0, < 1.2.3`) or common free text: `before 1.6.8`, `3.2.x prior to 3.2.4`,
+`2.4.1 and earlier`, `v1.28.0 - v1.28.8`, after an optional product name. A range that can't be
+compared isn't guessed at: it's counted in `advisory_map_unmatched_records` by reason:
 
 - `git`: given as commits.
 - `unspecified`, `unparsable`: no version, or one that isn't a version.
