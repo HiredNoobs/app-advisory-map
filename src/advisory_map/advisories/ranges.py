@@ -106,12 +106,12 @@ def _text(value: object) -> str:
 
 
 def _start(version: str) -> str | None:
-    """Where a range given an upper bound starts: its version, or a free-text range's start. From the
-    first version where it names none ("0", "n/a", the product's name)."""
+    """Where a range given an upper bound starts: its version (a release line's "10.4.x" as 10.4), or a
+    free-text range's start. From the first version where it names none ("0", "n/a", the product's name)."""
     if version.lower() in _FROM_START or not any(char.isdigit() for char in version):
         return None
     found = _free_text(version)
-    return found.lower if found else version
+    return found.lower if found else re.sub(r"\.x$", "", version, flags=re.IGNORECASE)
 
 
 def to_range(entry: dict[str, Any]) -> Range:
