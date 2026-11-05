@@ -26,7 +26,9 @@ log = logging.getLogger(__name__)
 URL = "https://github.com/CVEProject/cvelistV5.git"
 _BRANCH = "main"
 # git maps whole pack files into memory and caches delta bases. Capped, reading every record of the
-# ~340 MB pack peaks ~120 MB instead of ~450 MB, and the daily repack ~170 MB instead of ~570 MB.
+# ~340 MB pack peaks ~120 MB instead of ~450 MB, and the daily repack ~170 MB instead of ~570 MB. No
+# automatic gc or maintenance: the feed repacks itself, and a detached `git maintenance` would never be
+# reaped by the app, which is PID 1 in a container.
 _GIT_CONFIG = [
     argument
     for setting in (
@@ -36,6 +38,7 @@ _GIT_CONFIG = [
         "pack.threads=1",
         "pack.windowMemory=32m",
         "gc.auto=0",
+        "maintenance.auto=false",
     )
     for argument in ("-c", setting)
 ]
