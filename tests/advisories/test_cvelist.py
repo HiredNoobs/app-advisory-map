@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -11,6 +12,7 @@ from advisory_map.advisories.cvelist import (
     Advisory,
     CveList,
     Index,
+    bounded,
     match,
     record_path,
     severity,
@@ -123,6 +125,18 @@ def test_fetch_starts_no_detached_maintenance(
     feed.update(1000 + DAY, DAY)
     assert "fetch" in trace.read_text()
     assert "maintenance" not in trace.read_text()
+
+
+def test_first_fetch_says_it_takes_minutes(feed: CveList, origin: Origin, caplog: pytest.LogCaptureFixture) -> None:
+    origin.commit(record("CVE-2026-0001", affected("2.1.3")))
+    caplog.set_level(logging.INFO)
+    feed.update(1000, DAY)
+    assert "no copy yet" in caplog.text
+    caplog.clear()
+    feed.update(1000 + DAY, DAY)
+    assert "no copy yet" not in caplog.text
+    # A stalled transfer fails after a minute.
+    assert feed.git("config", "http.lowSpeedTime").strip() == "60"
 
 
 def test_restart_uses_the_index(feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -243,3 +257,12 @@ def test_match() -> None:
     )
     assert unmatched == Counter({"git": 1})
     assert list(match([vault], None, unmatched)) == []
+    # Affected by default, CVE-2026-0006 includes every later release; CVE-2026-0004 can't be compared.
+    assert bounded(vault, index) == {
+        "CVE-2026-0001",
+        "CVE-2026-0002",
+        "CVE-2026-0003",
+        "CVE-2026-0005",
+        "CVE-2026-0007",
+    }
+    assert bounded(vault, None) == set()

@@ -28,7 +28,8 @@ _BRANCH = "main"
 # git maps whole pack files into memory and caches delta bases. Capped, reading every record of the
 # ~340 MB pack peaks ~120 MB instead of ~450 MB, and the daily repack ~170 MB instead of ~570 MB. No
 # automatic gc or maintenance: the feed repacks itself, and a detached `git maintenance` would never be
-# reaped by the app, which is PID 1 in a container.
+# reaped by the app, which is PID 1 in a container. A fetch that stalls (under 1 KB/s for a minute)
+# fails instead of holding up the feeds after it until the connection drops.
 _GIT_CONFIG = [
     argument
     for setting in (
@@ -39,6 +40,8 @@ _GIT_CONFIG = [
         "pack.windowMemory=32m",
         "gc.auto=0",
         "maintenance.auto=false",
+        "http.lowSpeedLimit=1000",
+        "http.lowSpeedTime=60",
     )
     for argument in ("-c", setting)
 ]
@@ -52,6 +55,12 @@ class Advisory(NamedTuple):
     severity: Severity | None
     # The record's affected entries for the product.
     affected: tuple[dict[str, Any], ...]
+
+    @property
+    def bounded(self) -> bool:
+        """Whether the record says where its affected versions end: the CNA's entry, or an ADP's that
+        adds the bound."""
+        return any(map(ranges.bounded, self.affected))
 
 
 @dataclass(frozen=True)
@@ -220,6 +229,8 @@ class CveList(Feed[Index]):
             self.repo.mkdir(parents=True, exist_ok=True)
             self.git("init", "--quiet", "--bare")
         old = self._rev(f"refs/heads/{_BRANCH}")
+        if old is None:
+            log.info("feed %s: no copy yet, fetching it whole and reading every record takes minutes", self.name)
         self.git("fetch", "--quiet", "--depth", "1", self.url, _BRANCH)
         new = self.git("rev-parse", "FETCH_HEAD").strip()
 
@@ -299,6 +310,13 @@ class CveList(Feed[Index]):
         except Exception as error:
             log.warning("feed %s: severities not read: %s", self.name, error)
         return {cve: level for cve in cves if (level := self._severities.get(cve))}
+
+
+def bounded(item: Installed, index: Index | None) -> set[str]:
+    """The CVEs whose record for the installation's product says where its affected versions end."""
+    if index is None or item.product is None:
+        return set()
+    return {cve for cve, advisory in index.advisories.get(item.product, {}).items() if advisory.bounded}
 
 
 def match(installed: Iterable[Installed], index: Index | None, unmatched: Counter[str]) -> Iterator[Finding]:

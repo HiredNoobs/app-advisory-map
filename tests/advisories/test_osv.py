@@ -194,7 +194,12 @@ def test_match() -> None:
         "2026-11-01T00:00:00Z",
     )
     assert unmatched == Counter({"git": 1})
-    assert covered(vault, found) == {"CVE-2026-0001", "GHSA-0002", "GHSA-0003", "GO-2026-0004"}
+    assert covered(vault, found) == {
+        "CVE-2026-0001": True,
+        "GHSA-0002": True,
+        "GHSA-0003": True,
+        "GO-2026-0004": False,
+    }
     assert list(match([vault], None, unmatched)) == []
 
 
@@ -205,6 +210,15 @@ def test_bounded_records_decide() -> None:
         record("GO-2026-0005", fixed="", aliases=("CVE-2026-0005", "GHSA-0005")),
         # Only open ranges: they decide.
         record("GO-2026-0006", fixed="", aliases=("CVE-2026-0006",)),
+        # An entry per range, one left open: it includes every later release, whatever the others say.
+        {
+            **record("GHSA-0007", aliases=("CVE-2026-0007",)),
+            "affected": [*record("x")["affected"], *record("x", fixed="")["affected"]],
+        },
     )
     vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2")
-    assert [(f.cve, f.status) for f in match([vault], found, Counter())] == [("CVE-2026-0006", "open")]
+    assert [(f.cve, f.status) for f in match([vault], found, Counter())] == [
+        ("CVE-2026-0006", "open"),
+        ("CVE-2026-0007", "open"),
+    ]
+    assert covered(vault, found) == {"CVE-2026-0005": True, "CVE-2026-0006": False, "CVE-2026-0007": False}

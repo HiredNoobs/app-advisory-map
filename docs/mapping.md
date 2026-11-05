@@ -77,14 +77,16 @@ entry with the same query.
 OSV names a package as its ecosystem does: a Go module path, a PyPI or npm package name. An advisory on
 [osv.dev](https://osv.dev/) shows it under "Affected packages".
 
-Where an entry has both, OSV decides the CVEs it has records for in that package: its ranges are per
-package version, where CVE records often only name releases loosely. The CVE List adds the rest (a
-vendor's advisories that never reached a package database).
+Where an installation has a package, OSV decides the CVEs it has records for in that package: its
+ranges are per package version, where CVE records often only name releases loosely. The CVE List adds
+the rest (a vendor's advisories that never reached a package database).
 
 OSV's records of one vulnerability (GitHub's, the Go team's, ...) become one finding. Where they
-disagree, those whose ranges end (a fix, a last affected version) decide over those left open: the Go
-database leaves a range open when the fix isn't a version of the Go module, as for apps released as
-Grafana 13 or Vault 2 without a `/v13` or `/v2` module path.
+disagree, those that say where the affected versions end (every range ends in a fix or a last affected
+version) decide over those that leave a range open. A range is left open when the fix isn't a version
+of the package: the Go module, for apps released as Grafana 13 or Vault 2 without a `/v13` or `/v2`
+module path. Where every OSV record leaves it open, a CVE record that says where it ends decides
+instead, under any of the installation's entries (the entries with the same query).
 
 Changing the mapping's products or packages makes the next refresh read every record of that source
 again (about a minute for the CVE List, seconds for an OSV ecosystem), instead of only the changed ones.

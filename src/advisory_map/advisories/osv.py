@@ -41,7 +41,9 @@ class Advisory(NamedTuple):
 
     @property
     def bounded(self) -> bool:
-        return any(map(ranges.osv_bounded, self.affected))
+        """Whether the record says where its affected versions end: one entry left open includes every
+        later release."""
+        return all(map(ranges.osv_bounded, self.affected))
 
 
 # package -> OSV ID -> advisory
@@ -194,11 +196,15 @@ class Osv(Feed[Index]):
             advisories.setdefault(package, {})[record["id"]] = Advisory(_key(record), _severity(record), tuple(entries))
 
 
-def covered(item: Installed, index: Index | None) -> set[str]:
-    """The CVEs (and advisory IDs) OSV has records for in the installation's package: OSV decides those."""
+def covered(item: Installed, index: Index | None) -> dict[str, bool]:
+    """The CVEs (and advisory IDs) OSV has records for in the installation's package, and whether one of
+    them says where the affected versions end."""
+    found: dict[str, bool] = {}
     if index is None or item.package is None:
-        return set()
-    return {advisory.key for advisory in index.advisories.get(item.package, {}).values()}
+        return found
+    for advisory in index.advisories.get(item.package, {}).values():
+        found[advisory.key] = found.get(advisory.key, False) or advisory.bounded
+    return found
 
 
 def _merged(verdicts: Iterable[tuple[bool, str]]) -> tuple[bool, str]:
@@ -220,9 +226,9 @@ def match(installed: Iterable[Installed], index: Index | None, unmatched: Counte
     """A finding per vulnerability that includes an installation's version, its records merged; ranges
     that can't be compared are counted in unmatched by reason.
 
-    Where a vulnerability has records whose ranges end (a fix, a last affected version), they decide over
-    those left open: the Go database leaves a range open when the fix isn't a version of the Go module
-    (Grafana 13, Vault 2), while GitHub's advisory names the release that fixed it.
+    Where a vulnerability has records that say where its affected versions end, they decide over those
+    that leave a range open: a range is left open when the fix isn't a version of the package, as for
+    Grafana 13 or Vault 2 as Go modules, while another record may name the release that fixed it.
     """
     if index is None:
         return

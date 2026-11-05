@@ -190,7 +190,8 @@ def test_cve_records(env: dict[str, str], origin: Origin, tmp_path: Path) -> Non
 
 
 def osv_record(cve: str, fixed: str, **fields: Any) -> dict[str, Any]:
-    events = [{"introduced": "0"}, {"fixed": fixed}]
+    """GitHub's record of a CVE in Vault; without a fix, its range is left open."""
+    events = [{"introduced": "0"}, *([{"fixed": fixed}] if fixed else [])]
     return {
         "id": cve.replace("CVE", "GHSA"),
         "modified": "2026-11-01T00:00:00Z",
@@ -249,6 +250,53 @@ images = "^hashicorp/vault:"
     }
     assert metrics["advisory_map_unmapped_image_info"] == [({"image": "redis:8.2"}, 1.0)]
     assert ({"feed": "osv"}, 2.0) in metrics["advisory_map_feed_records"]
+
+
+def test_bounded_cve_records_decide_over_open_osv_ranges(
+    env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path
+) -> None:
+    # Two entries for one installation, one per product name: the bound counts for the installation.
+    mapping = tmp_path / "mapping.toml"
+    mapping.write_text("""
+[[software]]
+query = "vault_build_info"
+vendor = "HashiCorp"
+product = "Vault"
+ecosystem = "Go"
+package = "github.com/hashicorp/vault"
+
+[[software]]
+query = "vault_build_info"
+vendor = "HashiCorp"
+product = "Vault Enterprise"
+""")
+    origin.commit(
+        # Fixed before the installed version (v2.1.2).
+        record(
+            "CVE-2026-0103", [{"version": "0", "lessThan": "2.1.0", "status": "affected"}], product="Vault Enterprise"
+        ),
+        # Fixed in a later one.
+        record("CVE-2026-0104", [{"version": "0", "lessThan": "2.2.0", "status": "affected"}]),
+        # Open as well: OSV's finding stands.
+        record("CVE-2026-0105", [{"version": "2.0.0", "lessThan": "*", "status": "affected"}]),
+    )
+    fake_http.routes[f"{OSV_URL}/Go/modified_id.csv"] = response(b"2026-11-01T00:00:00Z,GHSA-2026-0103\n")
+    fake_http.routes[f"{OSV_URL}/Go/all.zip"] = response(
+        osv_archive(*(osv_record(f"CVE-2026-010{n}", "") for n in range(3, 7)))
+    )
+    app = App(Settings.from_env({**env, "MAPPING_FILE": str(mapping)}))
+    app.run_once(1000)
+    found = {
+        labels["cve"]: (labels["source"], labels["status"], labels["fixed_version"])
+        for labels, _ in scrape(app)["advisory_map_vulnerability_info"]
+        if labels["target"] == "host-2"
+    }
+    assert found == {
+        "CVE-2026-0104": ("cve.org", "fix-available", "2.2.0"),
+        "CVE-2026-0105": ("osv", "open", ""),
+        # No CVE record.
+        "CVE-2026-0106": ("osv", "open", ""),
+    }
 
 
 def test_unknown_feed_override(env: dict[str, str]) -> None:
