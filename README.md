@@ -16,7 +16,8 @@ Each feed's last good copy is kept in `DATA_DIR`; a failed or invalid download k
 are read a record at a time, so memory stays small (~50 MB with the full Debian tracker). The CVE List
 is a head-only git clone (~340 MB on disk), and OSV an index of the mapped packages' records (each
 ecosystem's archive is downloaded once: 13 MB for Go, 220 MB for npm); each refresh reads only the
-records that changed.
+records that changed. Findings come from the copies in use while the feeds refresh, so a restart
+doesn't wait for them.
 
 A finding's severity is from the source updated most recently: a CVE record's CVSS severity (CNA or
 ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency.

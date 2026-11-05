@@ -12,7 +12,7 @@ import subprocess
 import threading
 from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Any, NamedTuple
 
@@ -213,10 +213,13 @@ class CveList(Feed[Index]):
     def records(self) -> int:
         return sum(len(cves) for cves in self.data.advisories.values()) if self.data else 0
 
-    def _load(self) -> Index | None:
+    def _load(self) -> Index:
         index = Index.from_json(self.index_path.read_bytes())
-        # Indexed for other products: a refresh reads every record again.
-        return index if index.products == self.products else None
+        # Indexed for other products, it's partial: those still mapped until a refresh.
+        return replace(index, advisories={p: cves for p, cves in index.advisories.items() if p in self.products})
+
+    def _partial(self) -> bool:
+        return self.data is not None and self.data.products != self.products
 
     def _rev(self, ref: str) -> str | None:
         try:
@@ -234,7 +237,7 @@ class CveList(Feed[Index]):
         self.git("fetch", "--quiet", "--depth", "1", self.url, _BRANCH)
         new = self.git("rev-parse", "FETCH_HEAD").strip()
 
-        if self.data is None or old is None or self.data.commit != old:
+        if self.data is None or self._partial() or old is None or self.data.commit != old:
             advisories = self._scan(new)
         elif new != old:
             advisories = self._delta(self.data.advisories, old, new)

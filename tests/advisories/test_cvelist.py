@@ -155,7 +155,12 @@ def test_changed_products_read_every_record(feed: CveList, origin: Origin) -> No
     )
     feed.update(1000, DAY)
     restarted = CveList(feed.data_dir, {VAULT, CONSUL}, origin.url)
-    restarted.update(2000, DAY)
+    # Until then, the records of the products still mapped.
+    restarted.load()
+    assert restarted.data is not None and list(restarted.data.advisories) == [VAULT]
+    assert restarted.due(1000, DAY)
+    restarted.update(1000, DAY)
+    assert not restarted.due(1000, DAY)
     assert restarted.data is not None
     assert {product: sorted(cves) for product, cves in restarted.data.advisories.items()} == {
         VAULT: ["CVE-2026-0001"],

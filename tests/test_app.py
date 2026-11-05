@@ -8,6 +8,7 @@ from prometheus_client import CollectorRegistry, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
 
 from advisory_map.advisories.debian import DebianTracker
+from advisory_map.advisories.feed import Feed
 from advisory_map.advisories.kev import Kev
 from advisory_map.app import App
 from advisory_map.common import http
@@ -145,6 +146,16 @@ def test_restart_uses_the_copy_on_disk(app: App, fake_http: FakeHttp) -> None:
     restarted.run_once(1000 + 2 * 86400)
     assert len(restarted.findings) == 2
     assert restarted.kev.meta.last_success == 1000
+
+
+def test_findings_stay_while_the_feeds_refresh(app: App, monkeypatch: pytest.MonkeyPatch) -> None:
+    app.run_once(1000)
+    restarted = App(app.settings)
+    during: list[int] = []
+    monkeypatch.setattr(Feed, "refresh", lambda feed, now: during.append(len(restarted.findings)))
+    restarted.run_once(1000 + 2 * 86400)
+    # Each feed was due: the findings from the copies on disk were there while it refreshed.
+    assert during == [2, 2, 2, 2]
 
 
 def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:

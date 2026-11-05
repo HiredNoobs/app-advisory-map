@@ -47,13 +47,18 @@ class Feed[T]:
         """How many records data holds, for the feed's metrics."""
         raise NotImplementedError
 
-    def _load(self) -> T | None:
-        """The copy on disk: FileNotFoundError without one, None where it can't be used."""
+    def _load(self) -> T:
+        """The copy on disk: FileNotFoundError without one."""
         raise NotImplementedError
 
     def _fetch(self) -> None:
         """A new copy into data and on disk, or an exception leaving both as they were."""
         raise NotImplementedError
+
+    def _partial(self) -> bool:
+        """Whether data is a copy indexed for another mapping, in use for what's still mapped until a
+        refresh reads every record again."""
+        return False
 
     def load(self) -> None:
         """The copy on disk, if there is one. One that doesn't load is fetched again."""
@@ -68,7 +73,12 @@ class Feed[T]:
             self.data = None
 
     def due(self, now: float, interval: int) -> bool:
-        return self.data is None or self.meta.last_success is None or now - self.meta.last_success >= interval
+        return (
+            self.data is None
+            or self._partial()
+            or self.meta.last_success is None
+            or now - self.meta.last_success >= interval
+        )
 
     def update(self, now: float, interval: int) -> None:
         """The copy on disk until there's one in use, then a refresh whenever one is due."""

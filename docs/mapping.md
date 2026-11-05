@@ -90,6 +90,7 @@ instead, under any of the installation's entries (the entries with the same quer
 
 Changing the mapping's products or packages makes the next refresh read every record of that source
 again (about a minute for the CVE List, seconds for an OSV ecosystem), instead of only the changed ones.
+Meanwhile the findings of what's still mapped stay, from the records already read.
 
 ## Versions
 
