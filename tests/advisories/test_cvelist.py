@@ -11,6 +11,7 @@ from advisory_map.advisories.cvelist import (
     Advisory,
     CveList,
     Index,
+    bounded,
     match,
     record_path,
     severity,
@@ -243,3 +244,12 @@ def test_match() -> None:
     )
     assert unmatched == Counter({"git": 1})
     assert list(match([vault], None, unmatched)) == []
+    # Affected by default, CVE-2026-0006 includes every later release; CVE-2026-0004 can't be compared.
+    assert bounded(vault, index) == {
+        "CVE-2026-0001",
+        "CVE-2026-0002",
+        "CVE-2026-0003",
+        "CVE-2026-0005",
+        "CVE-2026-0007",
+    }
+    assert bounded(vault, None) == set()

@@ -5,6 +5,7 @@ import pytest
 from advisory_map.advisories.ranges import (
     Range,
     Unmatched,
+    bounded,
     comparable,
     osv_bounded,
     osv_status,
@@ -166,10 +167,37 @@ def test_osv_status_git() -> None:
     [
         (TWICE, True),
         (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), True),
-        (osv({"introduced": "0"}, versions=["1.0"]), True),
+        (osv({"introduced": "0"}, {"fixed": "8f2e9c1"}, kind="GIT"), True),
+        ({"versions": ["1.0"]}, True),
         (osv({"introduced": "0"}), False),
+        # Fixed in a pseudo-version, reintroduced from a release on: the last event, in version order.
+        (osv({"introduced": "0.0.1-test"}, {"introduced": "0"}, {"fixed": "0.0.0-20250521211231-abc"}), False),
+        # A list of versions doesn't end a range that's left open.
+        (osv({"introduced": "0"}, versions=["1.0"]), False),
+        ({"ranges": [*TWICE["ranges"], *osv({"introduced": "2.0"})["ranges"]]}, False),
         ({}, False),
     ],
 )
 def test_osv_bounded(entry: dict[str, Any], expected: bool) -> None:
     assert osv_bounded(entry) is expected
+
+
+@pytest.mark.parametrize(
+    "versions, default, expected",
+    [
+        ([{"version": "0", "lessThan": "2.1.3", "status": "affected"}], None, True),
+        ([{"version": "2.0", "lessThanOrEqual": "2.1.2", "status": "affected"}], "unaffected", True),
+        ([{"version": "2.1.2", "status": "affected"}], None, True),
+        ([{"version": ">= 1.0, < 2.0", "status": "affected"}], None, True),
+        ([{"version": "2.0", "lessThan": "*", "status": "affected"}], None, False),
+        ([{"version": ">= 1.0", "status": "affected"}], None, False),
+        # Affected by default: the listed range doesn't end it, an unaffected one from a release does.
+        ([{"version": "0", "lessThan": "1.9", "status": "affected"}], "affected", False),
+        ([{"version": "2.1.3", "lessThan": "*", "status": "unaffected"}], "affected", True),
+        ([{"version": "0", "lessThan": "1.3.0", "status": "unaffected"}], "affected", False),
+        ([{"version": "n/a", "status": "affected"}], None, False),
+        ([], "affected", False),
+    ],
+)
+def test_bounded(versions: list[dict[str, str]], default: str | None, expected: bool) -> None:
+    assert bounded({"versions": versions, "defaultStatus": default}) is expected

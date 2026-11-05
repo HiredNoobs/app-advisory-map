@@ -53,6 +53,12 @@ class Advisory(NamedTuple):
     # The record's affected entries for the product.
     affected: tuple[dict[str, Any], ...]
 
+    @property
+    def bounded(self) -> bool:
+        """Whether the record says where its affected versions end: the CNA's entry, or an ADP's that
+        adds the bound."""
+        return any(map(ranges.bounded, self.affected))
+
 
 @dataclass(frozen=True)
 class Index:
@@ -299,6 +305,13 @@ class CveList(Feed[Index]):
         except Exception as error:
             log.warning("feed %s: severities not read: %s", self.name, error)
         return {cve: level for cve in cves if (level := self._severities.get(cve))}
+
+
+def bounded(item: Installed, index: Index | None) -> set[str]:
+    """The CVEs whose record for the installation's product says where its affected versions end."""
+    if index is None or item.product is None:
+        return set()
+    return {cve for cve, advisory in index.advisories.get(item.product, {}).items() if advisory.bounded}
 
 
 def match(installed: Iterable[Installed], index: Index | None, unmatched: Counter[str]) -> Iterator[Finding]:

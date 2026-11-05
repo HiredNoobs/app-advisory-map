@@ -22,6 +22,17 @@ from advisory_map.metrics import Collector
 
 log = logging.getLogger(__name__)
 
+# An installation (kind, target, namespace) and a CVE.
+type _Key = tuple[str, str, str, str]
+
+
+def _key(item: Installed, cve: str) -> _Key:
+    return item.kind, item.target, item.namespace, cve
+
+
+def _finding_key(finding: Finding) -> _Key:
+    return finding.target_kind, finding.target, finding.namespace, finding.cve
+
 
 def _rated(finding: Finding, severities: dict[str, Severity]) -> Finding:
     """The severity of the most recently updated source that has one: the finding's own, or its CVE
@@ -58,22 +69,36 @@ class App:
         self.last_match_success: float | None = None
 
     def _match(self) -> tuple[list[Finding], Counter[tuple[str, str]]]:
-        """Every source's findings, and the ranges that couldn't be compared by source and reason. Where OSV
-        has records for a CVE in an installation's package, its ranges decide (they're per package
-        version, CVE records often aren't), not the CVE record's."""
+        """Every source's findings, and the ranges that couldn't be compared by source and reason.
+
+        Where OSV has records for a CVE in an installation's package, its ranges decide (they're per
+        package version, CVE records often aren't), not the CVE record's. Unless every OSV record leaves
+        a range open and the CVE record says where it ends: a range is left open when the fix isn't a
+        version of the package (Grafana 13, Vault 2 as Go modules). Per installation, not per mapping
+        entry: one installation can have an entry for each name its CVE records use.
+        """
         unmatched = {"cve.org": Counter[str](), "osv": Counter[str]()}
-        decided = {
-            (item.kind, item.target, item.namespace, cve)
-            for item in self.software
-            for cve in osv.covered(item, self.osv.data)
-        }
+        # Each (installation, CVE) OSV has records for: whether one of them says where it ends.
+        in_osv: dict[_Key, bool] = {}
+        bounded_in_cvelist: set[_Key] = set()
+        for item in self.software:
+            for cve, bounded in osv.covered(item, self.osv.data).items():
+                in_osv[_key(item, cve)] = in_osv.get(_key(item, cve), False) or bounded
+            bounded_in_cvelist.update(_key(item, cve) for cve in cvelist.bounded(item, self.cvelist.data))
+        by_cvelist = {key for key, bounded in in_osv.items() if not bounded and key in bounded_in_cvelist}
+        by_osv = in_osv.keys() - by_cvelist
+
         findings = [
             *debian.match(self.hosts, self.debian.data or {}),
-            *osv.match(self.software, self.osv.data, unmatched["osv"]),
+            *(
+                finding
+                for finding in osv.match(self.software, self.osv.data, unmatched["osv"])
+                if _finding_key(finding) not in by_cvelist
+            ),
             *(
                 finding
                 for finding in cvelist.match(self.software, self.cvelist.data, unmatched["cve.org"])
-                if (finding.target_kind, finding.target, finding.namespace, finding.cve) not in decided
+                if _finding_key(finding) not in by_osv
             ),
         ]
         return findings, Counter(

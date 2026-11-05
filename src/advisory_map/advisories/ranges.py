@@ -7,6 +7,7 @@ That orders 1.2.3-rc.1 < 1.2.3 < 1.2.10, as semver and most vendors do.
 """
 
 import re
+from contextlib import suppress
 from typing import Any, NamedTuple
 
 from debian.debian_support import Version
@@ -117,6 +118,24 @@ def status(affected: dict[str, Any], version: str) -> tuple[str, str]:
     return default, ""
 
 
+def bounded(affected: dict[str, Any]) -> bool:
+    """Whether one `affected` entry says where its affected versions end: an affected range with an upper
+    bound (a single version is one) unless later releases are affected by default, or an unaffected
+    range from a release on."""
+    affected_by_default = affected.get("defaultStatus") == "affected"
+
+    def ends(entry: dict[str, Any]) -> bool:
+        try:
+            bounds = to_range(entry)
+        except Unmatched:
+            return False
+        if entry.get("status") == "affected":
+            return bounds.upper is not None and not affected_by_default
+        return entry.get("status") == "unaffected" and bounds.lower is not None and bounds.upper is None
+
+    return any(map(ends, affected.get("versions", [])))
+
+
 def _osv_range(events: list[dict[str, str]], installed: Version) -> tuple[bool, str]:
     """Whether a SEMVER or ECOSYSTEM range includes the version, and its fix: OSV's evaluation, over the
     events in version order (introduced "0" first)."""
@@ -135,14 +154,23 @@ def _osv_range(events: list[dict[str, str]], installed: Version) -> tuple[bool, 
     return True, next((value for version, kind, value in ordered if kind == "fixed" and version > installed), "")
 
 
+def _osv_ends(bounds: dict[str, Any]) -> bool:
+    """Whether an OSV range's last event, in version order, ends it (a fix, a last affected version)
+    rather than introducing every version after it. Events that can't be ordered (a GIT range's commits)
+    are taken as listed."""
+    events = [(kind, value) for event in bounds.get("events", []) for kind, value in event.items() if kind != "limit"]
+    if bounds.get("type") != "GIT":
+        with suppress(Unmatched):
+            events.sort(key=lambda event: comparable(event[1]))
+    return bool(events) and events[-1][0] != "introduced"
+
+
 def osv_bounded(affected: dict[str, Any]) -> bool:
-    """Whether one OSV `affected` entry says where it ends (a fix, a last affected version) or lists its
-    versions, rather than including every version from where it starts."""
-    return bool(affected.get("versions")) or any(
-        "fixed" in event or "last_affected" in event
-        for bounds in affected.get("ranges", [])
-        for event in bounds.get("events", [])
-    )
+    """Whether one OSV `affected` entry says where its affected versions end: every range ends, or it
+    has only a list of versions. One range left open includes every later release, whatever the others
+    say."""
+    found = affected.get("ranges", [])
+    return all(map(_osv_ends, found)) if found else bool(affected.get("versions"))
 
 
 def osv_status(affected: dict[str, Any], version: str, ecosystem: str) -> tuple[bool, str]:
