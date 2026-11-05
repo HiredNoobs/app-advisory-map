@@ -135,6 +135,16 @@ def _osv_range(events: list[dict[str, str]], installed: Version) -> tuple[bool, 
     return True, next((value for version, kind, value in ordered if kind == "fixed" and version > installed), "")
 
 
+def osv_bounded(affected: dict[str, Any]) -> bool:
+    """Whether one OSV `affected` entry says where it ends (a fix, a last affected version) or lists its
+    versions, rather than including every version from where it starts."""
+    return bool(affected.get("versions")) or any(
+        "fixed" in event or "last_affected" in event
+        for bounds in affected.get("ranges", [])
+        for event in bounds.get("events", [])
+    )
+
+
 def osv_status(affected: dict[str, Any], version: str, ecosystem: str) -> tuple[bool, str]:
     """Whether one OSV `affected` entry includes version, and the fix if known.
 

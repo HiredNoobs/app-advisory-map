@@ -39,6 +39,10 @@ class Advisory(NamedTuple):
     # The record's affected entries for the package.
     affected: tuple[dict[str, Any], ...]
 
+    @property
+    def bounded(self) -> bool:
+        return any(map(ranges.osv_bounded, self.affected))
+
 
 # package -> OSV ID -> advisory
 type Advisories = dict[Package, dict[str, Advisory]]
@@ -197,30 +201,45 @@ def covered(item: Installed, index: Index | None) -> set[str]:
     return {advisory.key for advisory in index.advisories.get(item.package, {}).values()}
 
 
+def _merged(verdicts: Iterable[tuple[bool, str]]) -> tuple[bool, str]:
+    """Whether any verdict includes the version, and the first fix among those that do."""
+    fixes = [fix for found, fix in verdicts if found]
+    return bool(fixes), next(filter(None, fixes), "")
+
+
+def _status(advisory: Advisory, version: str, ecosystem: str, unmatched: Counter[str]) -> tuple[bool, str]:
+    """Whether the record includes the version, and the fix if known."""
+    try:
+        return _merged(ranges.osv_status(entry, version, ecosystem) for entry in advisory.affected)
+    except ranges.Unmatched as reason:
+        unmatched[str(reason)] += 1
+        return False, ""
+
+
 def match(installed: Iterable[Installed], index: Index | None, unmatched: Counter[str]) -> Iterator[Finding]:
     """A finding per vulnerability that includes an installation's version, its records merged; ranges
-    that can't be compared are counted in unmatched by reason."""
+    that can't be compared are counted in unmatched by reason.
+
+    Where a vulnerability has records whose ranges end (a fix, a last affected version), they decide over
+    those left open: the Go database leaves a range open when the fix isn't a version of the Go module
+    (Grafana 13, Vault 2), while GitHub's advisory names the release that fixed it.
+    """
     if index is None:
         return
     for item in installed:
         if item.package is None:
             continue
-        hits: dict[str, list[tuple[str, Severity | None]]] = {}
+        ecosystem = item.package.ecosystem
+        vulnerabilities: dict[str, list[Advisory]] = {}
         for advisory in index.advisories.get(item.package, {}).values():
-            try:
-                verdicts = [
-                    ranges.osv_status(entry, item.version, item.package.ecosystem) for entry in advisory.affected
-                ]
-            except ranges.Unmatched as reason:
-                unmatched[str(reason)] += 1
+            vulnerabilities.setdefault(advisory.key, []).append(advisory)
+        for key, records in vulnerabilities.items():
+            deciding = [record for record in records if record.bounded] or records
+            found, fixed = _merged(_status(record, item.version, ecosystem, unmatched) for record in deciding)
+            if not found:
                 continue
-            if any(found for found, _ in verdicts):
-                fixed = next((fix for found, fix in verdicts if found and fix), "")
-                hits.setdefault(advisory.key, []).append((fixed, advisory.severity))
-        for key, records in hits.items():
-            fixed = next((fix for fix, _ in records if fix), "")
             severity = max(
-                (severity for _, severity in records if severity),
+                (record.severity for record in records if record.severity),
                 key=lambda severity: severity.updated,
                 default=Severity("unknown", ""),
             )
