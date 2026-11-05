@@ -146,7 +146,12 @@ def test_restart_uses_the_index(feed: Osv, fake_http: FakeHttp) -> None:
 def test_changed_packages_read_everything(feed: Osv) -> None:
     feed.update(1000, DAY)
     restarted = Osv(feed.data_dir, {VAULT, CONSUL}, URL)
-    restarted.update(2000, DAY)
+    # Until then, the records of the packages still mapped.
+    restarted.load()
+    assert restarted.data is not None and list(restarted.data.advisories) == [VAULT]
+    assert restarted.due(1000, DAY)
+    restarted.update(1000, DAY)
+    assert not restarted.due(1000, DAY)
     assert restarted.data is not None
     assert {package: sorted(ids) for package, ids in restarted.data.advisories.items()} == {
         VAULT: ["GHSA-0001"],

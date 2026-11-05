@@ -105,17 +105,27 @@ class App:
             {(source, reason): count for source, counts in unmatched.items() for reason, count in counts.items()}
         )
 
-    def run_once(self, now: float) -> None:
-        self.hosts = debian_hosts(self.prometheus)
-        self.software, self.unmapped_images = find(self.prometheus, self.mapping)
-        self.debian.use_releases(host.release for host in self.hosts)
-        for feed in self.feeds:
-            feed.update(now, self.settings.refresh_interval(feed.name))
-
+    def _update_findings(self, now: float) -> None:
         findings, self.unmatched = self._match()
         severities = self.cvelist.severities({finding.cve for finding in findings if finding.source != "cve.org"})
         self.findings = [_rated(finding, severities) for finding in findings]
         self.last_match_success = now
+
+    def run_once(self, now: float) -> None:
+        """Findings from the feeds' copies in use, then again once the feeds that are due refresh: a
+        refresh can take minutes (a first fetch, a changed mapping), and the findings stay meanwhile."""
+        self.hosts = debian_hosts(self.prometheus)
+        self.software, self.unmapped_images = find(self.prometheus, self.mapping)
+        self.debian.use_releases(host.release for host in self.hosts)
+        for feed in self.feeds:
+            if feed.data is None:
+                feed.load()
+        due = [feed for feed in self.feeds if feed.due(now, self.settings.refresh_interval(feed.name))]
+        self._update_findings(now)
+        for feed in due:
+            feed.refresh(now)
+        if due:
+            self._update_findings(now)
 
     def run(self) -> None:
         REGISTRY.register(Collector(self))

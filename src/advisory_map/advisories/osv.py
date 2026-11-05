@@ -11,7 +11,7 @@ import urllib.error
 import zipfile
 from collections import Counter
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -111,16 +111,19 @@ class Osv(Feed[Index]):
     def records(self) -> int:
         return sum(len(advisories) for advisories in self.data.advisories.values()) if self.data else 0
 
-    def _load(self) -> Index | None:
+    def _load(self) -> Index:
         index = Index.from_json(self.index_path.read_bytes())
-        # Indexed for other packages: a refresh reads every record again.
-        return index if index.packages == self.packages else None
+        # Indexed for other packages, it's partial: those still mapped until a refresh.
+        return replace(index, advisories={p: ids for p, ids in index.advisories.items() if p in self.packages})
+
+    def _partial(self) -> bool:
+        return self.data is not None and self.data.packages != self.packages
 
     def _fetch(self) -> None:
         cursors: dict[str, str] = {}
         advisories: Advisories = {}
         for ecosystem in sorted({package.ecosystem for package in self.packages}):
-            if self.data is None or not self.data.cursors.get(ecosystem):
+            if self.data is None or self._partial() or not self.data.cursors.get(ecosystem):
                 cursors[ecosystem], found = self._full(ecosystem)
             else:
                 current = {p: a for p, a in self.data.advisories.items() if p.ecosystem == ecosystem}
