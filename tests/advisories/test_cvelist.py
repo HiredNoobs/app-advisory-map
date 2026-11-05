@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -124,6 +125,18 @@ def test_fetch_starts_no_detached_maintenance(
     feed.update(1000 + DAY, DAY)
     assert "fetch" in trace.read_text()
     assert "maintenance" not in trace.read_text()
+
+
+def test_first_fetch_says_it_takes_minutes(feed: CveList, origin: Origin, caplog: pytest.LogCaptureFixture) -> None:
+    origin.commit(record("CVE-2026-0001", affected("2.1.3")))
+    caplog.set_level(logging.INFO)
+    feed.update(1000, DAY)
+    assert "no copy yet" in caplog.text
+    caplog.clear()
+    feed.update(1000 + DAY, DAY)
+    assert "no copy yet" not in caplog.text
+    # A stalled transfer fails after a minute.
+    assert feed.git("config", "http.lowSpeedTime").strip() == "60"
 
 
 def test_restart_uses_the_index(feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch) -> None:
