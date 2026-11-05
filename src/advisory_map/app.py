@@ -8,13 +8,14 @@ from dataclasses import replace
 from prometheus_client import REGISTRY, start_http_server
 
 from advisory_map.advisories import cvelist, debian, osv
-from advisory_map.advisories.cvelist import CveList
+from advisory_map.advisories.cvelist import CveList, Details
+from advisory_map.advisories.cwe import Cwe
 from advisory_map.advisories.debian import DebianTracker
 from advisory_map.advisories.feed import Feed
 from advisory_map.advisories.kev import Kev
 from advisory_map.advisories.osv import Osv
 from advisory_map.config import Settings
-from advisory_map.findings import Finding, Severity
+from advisory_map.findings import Finding
 from advisory_map.inventory.debian import DebianHost, debian_hosts
 from advisory_map.inventory.mapping import Installed, Mapping, find, load_mapping
 from advisory_map.inventory.prometheus import PrometheusAPI
@@ -34,10 +35,15 @@ def _finding_key(finding: Finding) -> _Key:
     return finding.target_kind, finding.target, finding.namespace, finding.cve
 
 
-def _rated(finding: Finding, severities: dict[str, Severity]) -> Finding:
-    """The severity of the most recently updated source that has one: the finding's own, or its CVE
-    record's. Debian's urgencies carry no date, so a CVE record's CVSS severity takes their place."""
-    found = severities.get(finding.cve)
+def _enriched(finding: Finding, record: Details | None) -> Finding:
+    """The finding with what its CVE record adds: the weaknesses the record cites, if any, and its severity
+    where the record updated it after the finding's source. Debian's urgencies carry no date, so a CVE
+    record's CVSS severity takes their place."""
+    if record is None:
+        return finding
+    if record.cwes:
+        finding = replace(finding, cwes=record.cwes)
+    found = record.severity
     if found is None or found.updated <= finding.severity_updated:
         return finding
     return replace(finding, severity=found.level, severity_source="cve.org", severity_updated=found.updated)
@@ -57,7 +63,8 @@ class App:
         self.osv = Osv(
             settings.data_dir, {item.package for item in self.mapping.software if item.package}, settings.osv_url
         )
-        self.feeds: tuple[Feed, ...] = (self.debian, self.kev, self.cvelist, self.osv)
+        self.cwe = Cwe(settings.data_dir)
+        self.feeds: tuple[Feed, ...] = (self.debian, self.kev, self.cvelist, self.osv, self.cwe)
         if unknown := settings.feed_refresh_overrides.keys() - {feed.name for feed in self.feeds}:
             raise ValueError(f"FEED_REFRESH_ for unknown feeds: {', '.join(sorted(unknown))}")
         self.hosts: list[DebianHost] = []
@@ -107,8 +114,8 @@ class App:
 
     def _update_findings(self, now: float) -> None:
         findings, self.unmatched = self._match()
-        severities = self.cvelist.severities({finding.cve for finding in findings if finding.source != "cve.org"})
-        self.findings = [_rated(finding, severities) for finding in findings]
+        records = self.cvelist.details({finding.cve for finding in findings})
+        self.findings = [_enriched(finding, records.get(finding.cve)) for finding in findings]
         self.last_match_success = now
 
     def run_once(self, now: float) -> None:

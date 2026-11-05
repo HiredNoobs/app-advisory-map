@@ -1,7 +1,11 @@
 """A CVE that applies to something running."""
 
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field, fields
 from typing import NamedTuple
+
+_CWE = re.compile(r"CWE-\d+")
 
 
 class Severity(NamedTuple):
@@ -30,7 +34,14 @@ class Finding:
     status: str
     # When severity was last updated, to keep the newest source's: not a label.
     severity_updated: str = field(default="", metadata={"label": False})
+    # The weaknesses (CWE IDs) it's an instance of: a metric of their own, not a label.
+    cwes: tuple[str, ...] = field(default=(), metadata={"label": False})
 
 
 # The fields served as labels.
 LABELS = tuple(item.name for item in fields(Finding) if item.metadata.get("label", True))
+
+
+def cwe_ids(values: Iterable[object]) -> tuple[str, ...]:
+    """The CWE IDs among a record's values, once each."""
+    return tuple(sorted({value for value in values if isinstance(value, str) and _CWE.fullmatch(value)}))
