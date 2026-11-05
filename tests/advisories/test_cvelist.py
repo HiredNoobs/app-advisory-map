@@ -111,6 +111,20 @@ def test_refresh_without_changes(feed: CveList, origin: Origin, monkeypatch: pyt
     assert feed.records() == 1
 
 
+def test_fetch_starts_no_detached_maintenance(
+    feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    origin.commit(record("CVE-2026-0001", affected("2.1.3")))
+    feed.update(1000, DAY)
+    origin.commit(record("CVE-2026-0002", affected("2.1.4")))
+    # Only the feed's fetch: git commit starts maintenance too.
+    trace = tmp_path / "trace"
+    monkeypatch.setenv("GIT_TRACE", str(trace))
+    feed.update(1000 + DAY, DAY)
+    assert "fetch" in trace.read_text()
+    assert "maintenance" not in trace.read_text()
+
+
 def test_restart_uses_the_index(feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch) -> None:
     origin.commit(record("CVE-2026-0001", affected("2.1.3")))
     feed.update(1000, DAY)

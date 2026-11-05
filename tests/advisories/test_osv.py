@@ -196,3 +196,15 @@ def test_match() -> None:
     assert unmatched == Counter({"git": 1})
     assert covered(vault, found) == {"CVE-2026-0001", "GHSA-0002", "GHSA-0003", "GO-2026-0004"}
     assert list(match([vault], None, unmatched)) == []
+
+
+def test_bounded_records_decide() -> None:
+    found = index(
+        # The Go database's range is left open, GitHub's ends before the installed version: not affected.
+        record("GHSA-0005", fixed="2.0.0", aliases=("CVE-2026-0005", "GO-2026-0005"), severity="HIGH"),
+        record("GO-2026-0005", fixed="", aliases=("CVE-2026-0005", "GHSA-0005")),
+        # Only open ranges: they decide.
+        record("GO-2026-0006", fixed="", aliases=("CVE-2026-0006",)),
+    )
+    vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2")
+    assert [(f.cve, f.status) for f in match([vault], found, Counter())] == [("CVE-2026-0006", "open")]

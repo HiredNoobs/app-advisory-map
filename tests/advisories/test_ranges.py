@@ -6,6 +6,7 @@ from advisory_map.advisories.ranges import (
     Range,
     Unmatched,
     comparable,
+    osv_bounded,
     osv_status,
     status,
     to_range,
@@ -158,3 +159,17 @@ def test_osv_status_git() -> None:
     with pytest.raises(Unmatched, match="git"):
         osv_status(git, "1.0", "Go")
     assert osv_status({**git, "versions": ["1.0"]}, "1.0", "Go") == (True, "")
+
+
+@pytest.mark.parametrize(
+    "entry, expected",
+    [
+        (TWICE, True),
+        (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), True),
+        (osv({"introduced": "0"}, versions=["1.0"]), True),
+        (osv({"introduced": "0"}), False),
+        ({}, False),
+    ],
+)
+def test_osv_bounded(entry: dict[str, Any], expected: bool) -> None:
+    assert osv_bounded(entry) is expected
