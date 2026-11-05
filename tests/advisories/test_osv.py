@@ -25,6 +25,7 @@ def record(
     aliases: tuple[str, ...] = (),
     severity: str | None = None,
     modified: str = "2026-11-01T00:00:00Z",
+    cwes: tuple[str, ...] = (),
     **fields: Any,
 ) -> dict[str, Any]:
     item: dict[str, Any] = {
@@ -39,8 +40,8 @@ def record(
         ],
         **fields,
     }
-    if severity:
-        item["database_specific"] = {"severity": severity}
+    if severity or cwes:
+        item["database_specific"] = {"severity": severity, "cwe_ids": list(cwes)}
     return item
 
 
@@ -58,7 +59,7 @@ def feed(tmp_path: Path, fake_http: FakeHttp) -> Osv:
     fake_http.routes[f"{URL}/Go/modified_id.csv"] = response(changes(("2026-11-01T00:00:00Z", "GHSA-0001")))
     fake_http.routes[f"{URL}/Go/all.zip"] = response(
         osv_archive(
-            record("GHSA-0001", aliases=("CVE-2026-0001",), severity="HIGH"),
+            record("GHSA-0001", aliases=("CVE-2026-0001",), severity="HIGH", cwes=("CWE-79", "NVD-CWE-noinfo")),
             record("GHSA-0002", package=CONSUL),
             record("GHSA-0003", withdrawn="2026-10-01T00:00:00Z"),
         )
@@ -82,6 +83,7 @@ def test_full_read(feed: Osv) -> None:
                     "CVE-2026-0001",
                     Severity("high", "2026-11-01T00:00:00Z"),
                     ({"ranges": record("x")["affected"][0]["ranges"], "versions": []},),
+                    ("CWE-79",),
                 )
             }
         },
@@ -175,9 +177,15 @@ def index(*records: dict[str, Any]) -> Index:
 
 def test_match() -> None:
     found = index(
-        # GitHub's and the Go team's records of one vulnerability: one finding.
-        record("GHSA-0001", fixed="", aliases=("CVE-2026-0001", "GO-2026-0001"), severity="MODERATE"),
-        record("GO-2026-0001", fixed="2.1.5", aliases=("CVE-2026-0001", "GHSA-0001")),
+        # GitHub's and the Go team's records of one vulnerability: one finding, with the CWEs of both.
+        record(
+            "GHSA-0001",
+            fixed="",
+            aliases=("CVE-2026-0001", "GO-2026-0001"),
+            severity="MODERATE",
+            cwes=("CWE-770", "CWE-400"),
+        ),
+        record("GO-2026-0001", fixed="2.1.5", aliases=("CVE-2026-0001", "GHSA-0001"), cwes=("CWE-400",)),
         # Neither has a CVE: the GitHub advisory names the finding.
         record("GO-2026-0002", fixed="2.2.0", aliases=("GHSA-0002",)),
         record("GHSA-0003", fixed="2.0.0"),
@@ -189,9 +197,9 @@ def test_match() -> None:
     unmatched: Counter[str] = Counter()
     vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2")
     findings = sorted(match([vault], found, unmatched), key=lambda finding: finding.cve)
-    assert [(f.cve, f.severity, f.fixed_version, f.status) for f in findings] == [
-        ("CVE-2026-0001", "medium", "2.1.5", "fix-available"),
-        ("GHSA-0002", "unknown", "2.2.0", "fix-available"),
+    assert [(f.cve, f.severity, f.fixed_version, f.status, f.cwes) for f in findings] == [
+        ("CVE-2026-0001", "medium", "2.1.5", "fix-available", ("CWE-400", "CWE-770")),
+        ("GHSA-0002", "unknown", "2.2.0", "fix-available", ()),
     ]
     assert (findings[0].source, findings[0].package, findings[0].severity_updated) == (
         "osv",

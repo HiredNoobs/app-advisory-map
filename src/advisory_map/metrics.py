@@ -42,6 +42,16 @@ class Collector(_Collector):
             vulnerabilities.add_metric([*labels, *_kev_labels(kev.get(finding.cve))], 1)
         yield vulnerabilities
 
+        weaknesses = GaugeMetricFamily(
+            "advisory_map_vulnerability_cwe_info",
+            "A weakness (CWE) of a CVE that applies to something running, named as in MITRE's catalogue.",
+            labels=["cve", "cwe", "cwe_name"],
+        )
+        names = app.cwe.data or {}
+        for cve, cwe in sorted({(finding.cve, cwe) for finding in app.findings for cwe in finding.cwes}):
+            weaknesses.add_metric([cve, cwe, names.get(cwe, "")], 1)
+        yield weaknesses
+
         packages = GaugeMetricFamily(
             "advisory_map_inventory_packages",
             "Packages (or mapped software) known per target; 0 where versions are missing (no dpkg textfile).",

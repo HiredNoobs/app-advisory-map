@@ -1,8 +1,8 @@
 """CVE.org's CVE List (github.com/CVEProject/cvelistV5): every CVE record, kept as a head-only bare git clone.
 
-Two uses: the CVSS severity of any CVE, read from git by its ID when a finding needs it; and the CVEs of
-the mapped products, from an index of just their records that each refresh updates from the files that
-changed. Nothing holds all ~420k records at once.
+Two uses: the CVSS severity and weaknesses (CWEs) of any CVE, read from git by its ID when a finding
+needs them; and the CVEs of the mapped products, from an index of just their records that each refresh
+updates from the files that changed. Nothing holds all ~420k records at once.
 """
 
 import json
@@ -18,7 +18,7 @@ from typing import IO, Any, NamedTuple
 
 from advisory_map.advisories import ranges
 from advisory_map.advisories.feed import Feed, write_atomic
-from advisory_map.findings import Finding, Severity
+from advisory_map.findings import Finding, Severity, cwe_ids
 from advisory_map.inventory.mapping import Installed, Product
 
 log = logging.getLogger(__name__)
@@ -132,6 +132,26 @@ def severity(record: dict[str, Any]) -> Severity | None:
     return found
 
 
+class Details(NamedTuple):
+    """What a CVE's record says of it, whichever source found it."""
+
+    severity: Severity | None
+    cwes: tuple[str, ...]
+
+
+def details(record: dict[str, Any]) -> Details:
+    """The record's severity, and the weaknesses its CNA and ADPs cite."""
+    return Details(
+        severity(record),
+        cwe_ids(
+            description.get("cweId")
+            for container in _containers(record)
+            for problem in container.get("problemTypes", [])
+            for description in problem.get("descriptions", [])
+        ),
+    )
+
+
 class _Git:
     def __init__(self, repo: Path) -> None:
         self.repo = repo
@@ -205,8 +225,8 @@ class CveList(Feed[Index]):
         self.repo = data_dir / "cvelist.git"
         self.index_path = data_dir / "cvelist-index.json"
         self.git = _Git(self.repo)
-        # CVE -> its severity, at data's commit.
-        self._severities: dict[str, Severity | None] = {}
+        # CVE -> what its record says of it, at data's commit.
+        self._details: dict[str, Details | None] = {}
         # Bytes that a record of a mapped product must contain: cheap to look for before parsing it.
         self._needles = [json.dumps(product.product).encode() for product in self.products]
 
@@ -247,7 +267,7 @@ class CveList(Feed[Index]):
         write_atomic(self.index_path, index.to_json())
         self.git("update-ref", f"refs/heads/{_BRANCH}", new)
         if self.data is None or self.data.commit != new:
-            self._severities.clear()
+            self._details.clear()
         self.data = index
         if old not in (None, new):
             # Only the head's objects stay: the old commit goes, and the records only it had.
@@ -302,17 +322,17 @@ class CveList(Feed[Index]):
         }
         return self._read(kept, (f"{new}:{path}" for path in paths))
 
-    def severities(self, cves: Collection[str]) -> dict[str, Severity]:
-        """The CVSS severities of these CVEs, where their records have one."""
+    def details(self, cves: Collection[str]) -> dict[str, Details]:
+        """What the records of these CVEs say of them, where there's a record."""
         if self.data is None:
             return {}
-        wanted = sorted({cve for cve in cves if cve.startswith("CVE-")} - self._severities.keys())
+        wanted = sorted({cve for cve in cves if cve.startswith("CVE-")} - self._details.keys())
         try:
             for cve, raw in zip(wanted, self.git.cat(f"{self.data.commit}:{record_path(cve)}" for cve in wanted)):
-                self._severities[cve] = severity(json.loads(raw)) if raw else None
+                self._details[cve] = details(json.loads(raw)) if raw else None
         except Exception as error:
-            log.warning("feed %s: severities not read: %s", self.name, error)
-        return {cve: level for cve in cves if (level := self._severities.get(cve))}
+            log.warning("feed %s: records not read: %s", self.name, error)
+        return {cve: found for cve in cves if (found := self._details.get(cve))}
 
 
 def bounded(item: Installed, index: Index | None) -> set[str]:

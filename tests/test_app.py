@@ -3,10 +3,11 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from conftest import KEV, TRACKER, FakeHttp, Origin, osv_archive, record, response
+from conftest import CWES, KEV, TRACKER, FakeHttp, Origin, osv_archive, record, response
 from prometheus_client import CollectorRegistry, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
 
+from advisory_map.advisories.cwe import Cwe
 from advisory_map.advisories.debian import DebianTracker
 from advisory_map.advisories.feed import Feed
 from advisory_map.advisories.kev import Kev
@@ -49,7 +50,9 @@ class FakePrometheus:
 @pytest.fixture
 def prometheus(fake_http: FakeHttp) -> FakePrometheus:
     fake = FakePrometheus()
-    fake_http.routes.update({PROMETHEUS_URL: fake, DebianTracker.url: response(TRACKER), Kev.url: response(KEV)})
+    fake_http.routes.update(
+        {PROMETHEUS_URL: fake, DebianTracker.url: response(TRACKER), Kev.url: response(KEV), Cwe.url: response(CWES)}
+    )
     return fake
 
 
@@ -129,6 +132,7 @@ def test_run_once(app: App) -> None:
         ({"feed": "kev"}, 1000),
         ({"feed": "cvelist"}, 1000),
         ({"feed": "osv"}, 1000),
+        ({"feed": "cwe"}, 1000),
     ]
     assert metrics["advisory_map_match_last_success_timestamp_seconds"] == [({}, 1000)]
 
@@ -136,7 +140,11 @@ def test_run_once(app: App) -> None:
 def test_feeds_refresh_only_when_due(app: App, fake_http: FakeHttp) -> None:
     app.run_once(1000)
     app.run_once(1900)
-    assert [url for url, _ in fake_http.requests if not url.startswith(PROMETHEUS_URL)] == [DebianTracker.url, Kev.url]
+    assert [url for url, _ in fake_http.requests if not url.startswith(PROMETHEUS_URL)] == [
+        DebianTracker.url,
+        Kev.url,
+        Cwe.url,
+    ]
 
 
 def test_restart_uses_the_copy_on_disk(app: App, fake_http: FakeHttp) -> None:
@@ -155,7 +163,7 @@ def test_findings_stay_while_the_feeds_refresh(app: App, monkeypatch: pytest.Mon
     monkeypatch.setattr(Feed, "refresh", lambda feed, now: during.append(len(restarted.findings)))
     restarted.run_once(1000 + 2 * 86400)
     # Each feed was due: the findings from the copies on disk were there while it refreshed.
-    assert during == [2, 2, 2, 2]
+    assert during == [2, 2, 2, 2, 2]
 
 
 def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:
@@ -308,6 +316,39 @@ product = "Vault Enterprise"
         # No CVE record.
         "CVE-2026-0106": ("osv", "open", ""),
     }
+
+
+def test_cwes(env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path) -> None:
+    mapping = tmp_path / "mapping.toml"
+    mapping.write_text("""
+[[software]]
+query = "vault_build_info"
+ecosystem = "Go"
+package = "github.com/hashicorp/vault"
+""")
+    origin.commit(
+        # Debian's finding: the CVE record's CWEs, one the catalogue doesn't name.
+        record("CVE-2026-0001", product="openssl", cna_cwes=["CWE-79"], adp_cwes=["CWE-9999"]),
+        # The CVE record's CWEs, not OSV's.
+        record("CVE-2026-0107", cna_cwes=["CWE-79"]),
+    )
+    fake_http.routes[f"{OSV_URL}/Go/modified_id.csv"] = response(b"2026-11-01T00:00:00Z,GHSA-2026-0106\n")
+    fake_http.routes[f"{OSV_URL}/Go/all.zip"] = response(
+        osv_archive(
+            # No CVE record: OSV's.
+            osv_record("CVE-2026-0106", "", database_specific={"cwe_ids": ["CWE-310"]}),
+            osv_record("CVE-2026-0107", "", database_specific={"cwe_ids": ["CWE-20"]}),
+        )
+    )
+    app = App(Settings.from_env({**env, "MAPPING_FILE": str(mapping)}))
+    app.run_once(1000)
+    xss = "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    assert scrape(app)["advisory_map_vulnerability_cwe_info"] == [
+        ({"cve": "CVE-2026-0001", "cwe": "CWE-79", "cwe_name": xss}, 1.0),
+        ({"cve": "CVE-2026-0001", "cwe": "CWE-9999", "cwe_name": ""}, 1.0),
+        ({"cve": "CVE-2026-0106", "cwe": "CWE-310", "cwe_name": "Cryptographic Issues"}, 1.0),
+        ({"cve": "CVE-2026-0107", "cwe": "CWE-79", "cwe_name": xss}, 1.0),
+    ]
 
 
 def test_unknown_feed_override(env: dict[str, str]) -> None:

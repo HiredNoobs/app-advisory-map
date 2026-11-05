@@ -20,7 +20,7 @@ from urllib.parse import quote
 from advisory_map.advisories import ranges
 from advisory_map.advisories.feed import Feed, write_atomic
 from advisory_map.common import http
-from advisory_map.findings import Finding, Severity
+from advisory_map.findings import Finding, Severity, cwe_ids
 from advisory_map.inventory.mapping import Installed, Package
 
 log = logging.getLogger(__name__)
@@ -38,6 +38,8 @@ class Advisory(NamedTuple):
     severity: Severity | None
     # The record's affected entries for the package.
     affected: tuple[dict[str, Any], ...]
+    # The weaknesses (CWE IDs) the record cites in its database_specific, as GitHub's do.
+    cwes: tuple[str, ...]
 
     @property
     def bounded(self) -> bool:
@@ -74,9 +76,9 @@ class Index:
     def from_json(cls, raw: bytes) -> "Index":
         index = json.loads(raw)
         advisories: Advisories = {}
-        for ecosystem, name, osv_id, key, severity, affected in index["advisories"]:
+        for ecosystem, name, osv_id, key, severity, affected, cwes in index["advisories"]:
             advisories.setdefault(Package(ecosystem, name), {})[osv_id] = Advisory(
-                key, Severity(*severity) if severity else None, tuple(affected)
+                key, Severity(*severity) if severity else None, tuple(affected), tuple(cwes)
             )
         return cls(frozenset(Package(*p) for p in index["packages"]), index["cursors"], advisories)
 
@@ -195,8 +197,11 @@ class Osv(Feed[Index]):
                 affected.setdefault(package, []).append(
                     {"ranges": entry.get("ranges", []), "versions": entry.get("versions", [])}
                 )
+        cwes = cwe_ids(record.get("database_specific", {}).get("cwe_ids", []))
         for package, entries in affected.items():
-            advisories.setdefault(package, {})[record["id"]] = Advisory(_key(record), _severity(record), tuple(entries))
+            advisories.setdefault(package, {})[record["id"]] = Advisory(
+                _key(record), _severity(record), tuple(entries), cwes
+            )
 
 
 def covered(item: Installed, index: Index | None) -> dict[str, bool]:
@@ -265,4 +270,5 @@ def match(installed: Iterable[Installed], index: Index | None, unmatched: Counte
                 fixed_version=fixed,
                 status="fix-available" if fixed else "open",
                 severity_updated=severity.updated,
+                cwes=cwe_ids(cwe for record in records for cwe in record.cwes),
             )

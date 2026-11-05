@@ -7,10 +7,11 @@ Advisories are downloaded whole and matched locally:
 
 - **Debian Security Tracker**: CVEs per source package and release, with the fixed version.
 - **CVE List** ([cvelistV5](https://github.com/CVEProject/cvelistV5)): every CVE record, for the
-  products in the [mapping](docs/mapping.md), and the CVSS severity of any CVE.
+  products in the [mapping](docs/mapping.md), and the CVSS severity and CWEs of any CVE.
 - **OSV** ([osv.dev](https://osv.dev)'s bulk exports): advisories per package ecosystem (Go, PyPI, npm,
   ...), for the packages in the mapping. Where it has records for a CVE in a package, its ranges decide.
 - **CISA KEV**: flags matches known to be exploited.
+- **MITRE's [CWE](https://cwe.mitre.org) catalogue**: names the weaknesses the records cite.
 
 Each feed's last good copy is kept in `DATA_DIR`; a failed or invalid download keeps using it. Feeds
 are read a record at a time, so memory stays small (~50 MB with the full Debian tracker). The CVE List
@@ -20,7 +21,8 @@ records that changed. Findings come from the copies in use while the feeds refre
 doesn't wait for them.
 
 A finding's severity is from the source updated most recently: a CVE record's CVSS severity (CNA or
-ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency.
+ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency. Its weaknesses
+(CWEs) are those its CVE record's CNA and ADPs cite, else those of its OSV records.
 
 ## Versions it reads
 
@@ -53,11 +55,12 @@ report the running images it doesn't cover.
 | `LISTEN_PORT` | `8080` | `/metrics` |
 | `MATCH_INTERVAL` | `15m` | how often versions are read and matched |
 | `FEED_REFRESH` | `24h` | how often the feeds are refreshed (conditional GETs, git fetches, changed records) |
-| `FEED_REFRESH_<FEED>` | `FEED_REFRESH` | per feed: `DEBIAN`, `CVELIST`, `OSV`, `KEV` |
+| `FEED_REFRESH_<FEED>` | `FEED_REFRESH` | per feed: `DEBIAN`, `CVELIST`, `OSV`, `KEV`, `CWE` |
 
 ## Metrics
 
 - `advisory_map_vulnerability_info{cve, severity, severity_source, source, target_kind, target, namespace, package, installed_version, fixed_version, status, kev, kev_date_added, kev_ransomware}`: 1 per CVE that applies (an OSV advisory's own ID where it has no CVE), gone once it doesn't. `source` is `debian`, `cve.org` or `osv`; `status` is `fix-available`, or why there's no fix (`open`, `no-dsa`, `postponed`, `ignored`, `undetermined`), or `unconfirmed`: affected only by the record's default (see [versions](docs/mapping.md#versions)).
+- `advisory_map_vulnerability_cwe_info{cve, cwe, cwe_name}`: 1 per weakness (CWE) of a CVE in `advisory_map_vulnerability_info`, with its name in the catalogue (empty for an ID it doesn't have). Joined on `cve`, e.g. CVEs per weakness: `count by (cwe, cwe_name) (advisory_map_vulnerability_cwe_info and on (cve) advisory_map_vulnerability_info{target_kind="debian-package"})`.
 - `advisory_map_inventory_packages{target_kind, target}`: packages known per host (0: no `dpkg_package_info` for it), and mapped installations per target.
 - `advisory_map_unmapped_image_info{image}`: a running image no mapping entry covers, when the mapping has an `[images]` query.
 - `advisory_map_unmatched_records{source, reason}`: affected ranges that couldn't be compared with an installed version in the last match (`git` commits, `unspecified` or `unparsable` versions, OSV `ecosystem` ranges without a list of versions), so they're neither findings nor silently dropped.
@@ -69,7 +72,7 @@ report the running images it doesn't cover.
 The package `advisory_map` (tests mirror it):
 
 - `inventory/`: what's installed, from Prometheus (`debian.py` hosts and packages, `mapping.py` everything else).
-- `advisories/`: a module per feed (`debian.py`, `cvelist.py`, `osv.py`, `kev.py`), each with its matcher; `feed.py` is their base, `ranges.py` the version ranges they match.
+- `advisories/`: a module per feed (`debian.py`, `cvelist.py`, `osv.py`, `kev.py`, `cwe.py`), each with its matcher; `feed.py` is their base, `ranges.py` the version ranges they match.
 - `common/`: HTTP and streamed JSON.
 - `app.py` the match loop, `findings.py` its result, `metrics.py` `/metrics`, `config.py` the settings.
 

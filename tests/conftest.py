@@ -32,17 +32,25 @@ def record(
     cna_cvss: dict[str, Any] | None = None,
     adp_cvss: dict[str, Any] | None = None,
     state: str = "PUBLISHED",
+    cna_cwes: Iterable[str] = (),
+    adp_cwes: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """A CVE JSON 5 record: its CNA's affected product, and CVSS metrics from the CNA and/or an ADP."""
+    """A CVE JSON 5 record: its CNA's affected product, and CVSS metrics and CWEs from the CNA and/or an ADP."""
     cna: dict[str, Any] = {
         "providerMetadata": {"dateUpdated": "2026-01-01T00:00:00.000Z"},
         "affected": [{"vendor": vendor, "product": product, "versions": versions or []}],
     }
-    if cna_cvss:
-        cna["metrics"] = [cna_cvss]
+    adp: dict[str, Any] = {}
+    for container, cvss, cwes in ((cna, cna_cvss, cna_cwes), (adp, adp_cvss, adp_cwes)):
+        if cvss:
+            container["metrics"] = [cvss]
+        if cwes:
+            container["problemTypes"] = [
+                {"descriptions": [{"lang": "en", "type": "CWE", "cweId": cwe, "description": cwe} for cwe in cwes]}
+            ]
     containers: dict[str, Any] = {"cna": cna}
-    if adp_cvss:
-        containers["adp"] = [{"providerMetadata": {"dateUpdated": "2026-06-01T00:00:00.000Z"}, "metrics": [adp_cvss]}]
+    if adp:
+        containers["adp"] = [{"providerMetadata": {"dateUpdated": "2026-06-01T00:00:00.000Z"}, **adp}]
     return {"cveMetadata": {"cveId": cve, "state": state}, "containers": containers}
 
 
@@ -117,6 +125,26 @@ TRACKER = {
 KEV = {
     "vulnerabilities": [{"cveID": "CVE-2026-0001", "dateAdded": "2026-10-30", "knownRansomwareCampaignUse": "Known"}]
 }
+
+
+def cwe_catalogue(*entries: tuple[str, str, str], namespace: str = "http://cwe.mitre.org/cwe-8") -> bytes:
+    """MITRE's cwec_latest.xml.zip, with these (kind, ID, name) entries."""
+    xml = "".join(
+        f'<{kind}s><{kind} ID="{cwe_id}" Name="{name}" Status="Draft"><Description>...</Description></{kind}></{kind}s>'
+        for kind, cwe_id, name in entries
+    )
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as archive:
+        archive.writestr(
+            "cwec_v5.0.xml", f'<?xml version="1.0"?><Weakness_Catalog xmlns="{namespace}">{xml}</Weakness_Catalog>'
+        )
+    return data.getvalue()
+
+
+CWES = cwe_catalogue(
+    ("Weakness", "79", "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"),
+    ("Grouping", "310", "Cryptographic Issues"),
+)
 
 
 def osv_archive(*records: dict[str, Any]) -> bytes:

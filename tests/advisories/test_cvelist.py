@@ -11,8 +11,10 @@ from conftest import Origin, record
 from advisory_map.advisories.cvelist import (
     Advisory,
     CveList,
+    Details,
     Index,
     bounded,
+    details,
     match,
     record_path,
     severity,
@@ -208,16 +210,33 @@ def test_severity(item: dict[str, Any], expected: Severity | None) -> None:
     assert severity(item) == expected
 
 
-def test_severities(feed: CveList, origin: Origin) -> None:
+def test_details(feed: CveList, origin: Origin) -> None:
     origin.commit(
-        record("CVE-2026-0001", cna_cvss=cvss("cvssV3_1", baseSeverity="HIGH"), product="openssl"),
+        record(
+            "CVE-2026-0001",
+            cna_cvss=cvss("cvssV3_1", baseSeverity="HIGH"),
+            product="openssl",
+            cna_cwes=["CWE-787", "CWE-125"],
+            # An ADP's CWE beside the CNA's, and one it cites twice.
+            adp_cwes=["CWE-125", "CWE-20"],
+        ),
         record("CVE-2026-0002", product="openssl"),
     )
-    assert feed.severities({"CVE-2026-0001"}) == {}
+    assert feed.details({"CVE-2026-0001"}) == {}
     feed.update(1000, DAY)
-    assert feed.severities({"CVE-2026-0001", "CVE-2026-0002", "CVE-2026-9999", "TEMP-0000000-ABCDEF"}) == {
-        "CVE-2026-0001": Severity("high", "2026-01-01T00:00:00.000Z")
+    assert feed.details({"CVE-2026-0001", "CVE-2026-0002", "CVE-2026-9999", "TEMP-0000000-ABCDEF"}) == {
+        "CVE-2026-0001": Details(Severity("high", "2026-01-01T00:00:00.000Z"), ("CWE-125", "CWE-20", "CWE-787")),
+        "CVE-2026-0002": Details(None, ()),
     }
+
+
+def test_details_without_a_cwe_id() -> None:
+    # Older records describe the problem in text only.
+    item = record("CVE-2017-0001")
+    item["containers"]["cna"]["problemTypes"] = [
+        {"descriptions": [{"lang": "en", "type": "text", "description": "n/a"}]}
+    ]
+    assert details(item) == Details(None, ())
 
 
 def test_match() -> None:
