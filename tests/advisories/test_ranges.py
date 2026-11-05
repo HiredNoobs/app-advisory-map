@@ -52,6 +52,30 @@ def test_unparsable(version: str) -> None:
         ({"version": ">= 1.0.0, < 1.2.3", "status": "affected"}, Range("1.0.0", True, "1.2.3", False)),
         ({"version": "< 2.0", "status": "affected"}, Range(None, True, "2.0", False)),
         ({"version": "> 1.0, <= 1.5", "status": "affected"}, Range("1.0", False, "1.5", True)),
+        (
+            {"version": "Open source RabbitMQ: >= 3.12.7, < 3.12.11", "status": "affected"},
+            Range("3.12.7", True, "3.12.11", False),
+        ),
+        # Free text.
+        ({"version": "before 1.6.8", "status": "affected"}, Range(None, True, "1.6.8", False)),
+        ({"version": "Prior to v1.13.9", "status": "affected"}, Range(None, True, "v1.13.9", False)),
+        ({"version": "3.2.x prior to 3.2.4", "status": "affected"}, Range("3.2", True, "3.2.4", False)),
+        ({"version": "kubelet 1.6 earlier than 1.6.9", "status": "affected"}, Range("1.6", True, "1.6.9", False)),
+        ({"version": "2.4.1 and earlier", "status": "affected"}, Range(None, True, "2.4.1", True)),
+        ({"version": "2.4.1 or below", "status": "affected"}, Range(None, True, "2.4.1", True)),
+        ({"version": "v1.28.0 - v1.28.8", "status": "affected"}, Range("v1.28.0", True, "v1.28.8", True)),
+        ({"version": "from 1.0 through 2.0", "status": "affected"}, Range("1.0", True, "2.0", True)),
+        # A free-text version beside an upper bound starts the range; a product's name starts from the first.
+        (
+            {"version": "kubelet v1.22.0 - v1.22.13", "lessThan": "v1.22.14", "status": "affected"},
+            Range("v1.22.0", True, "v1.22.14", False),
+        ),
+        ({"version": "longhorn", "lessThan": "1.1.3", "status": "affected"}, Range(None, True, "1.1.3", False)),
+        # A JSON escape left in the record's text.
+        (
+            {"version": "11.0.0", "lessThan": "11.0.5\\+security-01", "status": "affected"},
+            Range("11.0.0", True, "11.0.5+security-01", False),
+        ),
     ],
 )
 def test_to_range(entry: dict[str, str], expected: Range) -> None:
@@ -93,6 +117,20 @@ AFFECTED = {
 )
 def test_status(version: str, expected: tuple[str, str]) -> None:
     assert status(AFFECTED, version) == expected
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"version": "1.24.0", "lessThanOrEqual": "<=", "status": "affected"},
+        {"version": "1.8", "lessThan": "v1.8*", "status": "affected"},
+        {"version": "1.5", "lessThan": "unspecified", "status": "affected"},
+        {"version": "next of 1.23.1", "status": "unknown"},
+    ],
+)
+def test_status_unparsable(entry: dict[str, str]) -> None:
+    with pytest.raises(Unmatched, match="unparsable"):
+        status({"versions": [entry]}, "1.30.0")
 
 
 def test_status_without_a_default() -> None:

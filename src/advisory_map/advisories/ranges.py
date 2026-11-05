@@ -13,6 +13,22 @@ from typing import Any, NamedTuple
 from debian.debian_support import Version
 
 _CONSTRAINT = re.compile(r"\s*(<=|>=|<|>|=)?\s*([^\s,]+)\s*")
+# A label before a version, ending in a colon: "Open source RabbitMQ: >= 3.12.7, < 3.12.11".
+_LABEL = re.compile(r"^[^\d<>=:]+:\s*")
+# Free-text ranges, as older records write them, and whether their upper bound is inclusive. Words
+# naming the product may come first ("kubelet v1.22.0 - v1.22.13"); a lower bound's ".x" is dropped.
+_LOWER, _UPPER = (rf"(?P<{bound}>v?\d[\w.~+-]*?)" for bound in ("lower", "upper"))
+_FREE_TEXT = [
+    (re.compile(rf"(?:[^\d<>=]*?\s)?{pattern}", re.IGNORECASE), upper_inclusive)
+    for pattern, upper_inclusive in (
+        # "before 1.6.8", "prior to 1.13.9", "3.2.x prior to 3.2.4"
+        (rf"(?:{_LOWER}(?:\.x)?\s+)?(?:before|prior to|earlier than)\s+{_UPPER}", False),
+        # "2.4.1 and earlier", "2.4.1 or below"
+        (rf"{_UPPER}\s+(?:and|or)\s+(?:earlier|prior|below)", True),
+        # "v1.28.0 - v1.28.8", "from 1.0 through 2.0"
+        (rf"(?:from\s+)?{_LOWER}\s+(?:-|–|to|through)\s+{_UPPER}", True),
+    )
+]
 _UNSPECIFIED = {"", "n/a", "unspecified", "unknown"}
 # A range's lower bound that means "from the first version".
 _FROM_START = {"0", "*"} | _UNSPECIFIED
@@ -77,22 +93,45 @@ def _constraints(text: str) -> Range:
     return Range(lower, lower_inclusive, upper, upper_inclusive)
 
 
+def _free_text(text: str) -> Range | None:
+    for pattern, upper_inclusive in _FREE_TEXT:
+        if match := pattern.fullmatch(text):
+            return Range(match.groupdict().get("lower"), True, match["upper"], upper_inclusive)
+    return None
+
+
+def _text(value: object) -> str:
+    """A version field without a label or the JSON escapes some records keep ("11.0.5\\+security-01")."""
+    return _LABEL.sub("", str(value).replace("\\", "").strip())
+
+
+def _start(version: str) -> str | None:
+    """Where a range given an upper bound starts: its version, or a free-text range's start. From the
+    first version where it names none ("0", "n/a", the product's name)."""
+    if version.lower() in _FROM_START or not any(char.isdigit() for char in version):
+        return None
+    found = _free_text(version)
+    return found.lower if found else version
+
+
 def to_range(entry: dict[str, Any]) -> Range:
-    """One `versions` entry as a range."""
+    """One `versions` entry as a range: CVE JSON 5's bounds, GitHub's constraints or common free text."""
     if entry.get("versionType") == "git":
         raise Unmatched("git")
-    version = str(entry.get("version", "")).strip()
+    version = _text(entry.get("version", ""))
     upper = entry.get("lessThan")
     upper_inclusive = upper is None
     if upper is None:
         upper = entry.get("lessThanOrEqual")
     if upper is not None:
-        lower = None if version.lower() in _FROM_START else version
-        return Range(lower, True, None if upper == "*" else upper, upper_inclusive)
+        upper = _text(upper)
+        return Range(_start(version), True, None if upper == "*" else upper, upper_inclusive)
     if version.lower() in _UNSPECIFIED:
         raise Unmatched("unspecified")
     if version == "*":
         return Range(None, True, None, True)
+    if found := _free_text(version):
+        return found
     if any(op in version for op in "<>="):
         return _constraints(version)
     return Range(version, True, version, True)
