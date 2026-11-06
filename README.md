@@ -24,17 +24,27 @@ A finding's severity is from the source updated most recently: a CVE record's CV
 ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency. Its weaknesses
 (CWEs) are those its CVE record's CNA and ADPs cite, else those of its OSV records.
 
+## Requirements
+
+- **A Prometheus-compatible server** whose query API (`/api/v1/query`) the app can reach. It only
+  queries it: the versions must already be scraped there, and scraping advisory-map's own `/metrics`
+  is up to you.
+- **For Debian hosts:** [node_exporter](https://github.com/prometheus/node_exporter) on each one, with
+  the textfile collector, and [contrib/package-versions](contrib/package-versions) writing
+  `dpkg_package_info` into it hourly and after every APT run: [Debian hosts](docs/debian-hosts.md).
+- **For anything else:** a series with its version in a label, and a [mapping](docs/mapping.md) entry
+  for it.
+- **Outbound HTTPS** to the feeds (security-tracker.debian.org, github.com,
+  osv-vulnerabilities.storage.googleapis.com, www.cisa.gov, cwe.mitre.org), or mirrors for the CVE List
+  and OSV (`CVELIST_URL`, `OSV_URL`). Nothing about what's installed is sent.
+- **A writable `DATA_DIR`**, 2 GB to be safe: the CVE List's clone (twice its size while it's
+  repacked), the Debian tracker, and each mapped ecosystem's archive while it's first read.
+
 ## Versions it reads
 
 - `node_os_info{id="debian", version_codename, instance}`: node_exporter's, for each host's release.
 - `dpkg_package_info{instance, package, version, source, source_version}`: one series per installed
-  package, from node_exporter's textfile collector, e.g.
-
-  ```sh
-  dpkg-query -W -f '${Package}\t${Version}\t${source:Package}\t${source:Version}\n' |
-    awk -F'\t' '{ printf "dpkg_package_info{package=\"%s\",version=\"%s\",source=\"%s\",source_version=\"%s\"} 1\n", $1, $2, $3, $4 }' \
-    > /var/lib/node_exporter/dpkg.prom.tmp && mv /var/lib/node_exporter/dpkg.prom.tmp /var/lib/node_exporter/dpkg.prom
-  ```
+  package, from node_exporter's textfile collector ([contrib/package-versions](contrib/package-versions)).
 
 Hosts are matched on `instance`, so both series need the same one for a host.
 

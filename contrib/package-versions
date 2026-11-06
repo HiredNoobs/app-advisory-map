@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# Writes the installed Debian packages as node_exporter textfile metrics (dpkg_package_info), for
+# advisory-map. The file is replaced whole, so node_exporter never reads part of it. Run hourly and
+# after every APT run, as in docs/debian-hosts.md.
+#
+# Usage: package-versions <file>
+#   file  a .prom file in node_exporter's textfile directory (--collector.textfile.directory)
+
+set -euo pipefail
+
+output=${1:?usage: package-versions <.prom file in the textfile directory>}
+
+# Next to the output, so the rename is atomic; node_exporter only reads *.prom.
+tmp=$(mktemp "$output.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+
+{
+  echo "# HELP dpkg_package_info An installed Debian package, with its source package."
+  echo "# TYPE dpkg_package_info gauge"
+  # Installed packages only: dpkg-query also lists removed ones whose config files remain. A package
+  # installed for two architectures is listed twice, the same series. Package names and versions
+  # can't hold quotes or backslashes, so no escaping is needed.
+  dpkg-query -W -f '${db:Status-Status}\t${Package}\t${Version}\t${source:Package}\t${source:Version}\n' |
+    awk -F'\t' '$1 == "installed" {
+      printf "dpkg_package_info{package=\"%s\",version=\"%s\",source=\"%s\",source_version=\"%s\"} 1\n", $2, $3, $4, $5
+    }' |
+    LC_ALL=C sort -u
+} > "$tmp"
+
+# Readable by node_exporter whichever user runs this (mktemp's file is 0600); dpkg's own list of
+# packages is world-readable.
+chmod 0644 "$tmp"
+mv "$tmp" "$output"
