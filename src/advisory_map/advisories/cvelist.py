@@ -45,6 +45,9 @@ _GIT_CONFIG = [
     )
     for argument in ("-c", setting)
 ]
+# Older commits' objects are pruned at most once a day: a prune rewrites the whole pack, and the
+# repository's head moves every few minutes.
+_PRUNE_INTERVAL = 86400
 _RECORD = re.compile(r"CVE-\d+-\d+\.json")
 # Newest first: the first a record's metrics have wins.
 _CVSS = ("cvssV4_0", "cvssV3_1", "cvssV3_0", "cvssV2_0")
@@ -227,6 +230,8 @@ class CveList(Feed[Index]):
         self.git = _Git(self.repo)
         # CVE -> what its record says of it, at data's commit.
         self._details: dict[str, Details | None] = {}
+        # When this process last pruned the older commits: never yet, so its first refresh does.
+        self._pruned = float("-inf")
         # Bytes that a record of a mapped product must contain: cheap to look for before parsing it.
         self._needles = [json.dumps(product.product).encode() for product in self.products]
 
@@ -269,10 +274,12 @@ class CveList(Feed[Index]):
         if self.data is None or self.data.commit != new:
             self._details.clear()
         self.data = index
-        if old not in (None, new):
-            # Only the head's objects stay: the old commit goes, and the records only it had.
+        now = self.last_attempt or 0.0  # this refresh's time
+        if old not in (None, new) and now - self._pruned >= _PRUNE_INTERVAL:
+            # Only the head's objects stay: older commits go, and the records only they had.
             self.git("reflog", "expire", "--expire=now", "--all")
             self.git("gc", "--quiet", "--prune=now")
+            self._pruned = now
         log.info("feed %s: at %s, %d records of mapped products", self.name, new[:12], self.records())
 
     def _mentions_products(self, raw: bytes) -> bool:
