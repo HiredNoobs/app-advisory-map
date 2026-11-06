@@ -105,6 +105,27 @@ def test_refresh_reads_only_the_changed_records(feed: CveList, origin: Origin, m
     assert old not in kept
 
 
+def test_older_commits_are_pruned_daily(feed: CveList, origin: Origin) -> None:
+    def kept() -> set[str]:
+        return git(feed.repo, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
+
+    hour = 3600
+    zeroth = origin.commit(record("CVE-2026-0001", affected("2.1.3")))
+    feed.update(1000, hour)
+    first = origin.commit(record("CVE-2026-0002", affected("2.1.4")))
+    # The first prune since the app started is at once...
+    feed.update(1000 + hour, hour)
+    assert zeroth not in kept()
+    second = origin.commit(record("CVE-2026-0003", affected("2.1.5")))
+    # ...the next a day after it.
+    feed.update(1000 + 2 * hour, hour)
+    assert first in kept()
+    origin.commit(record("CVE-2026-0004", affected("2.1.6")))
+    feed.update(1000 + hour + DAY, hour)
+    assert first not in kept() and second not in kept()
+    assert feed.records() == 4
+
+
 def test_refresh_without_changes(feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch) -> None:
     origin.commit(record("CVE-2026-0001", affected("2.1.3")))
     feed.update(1000, DAY)
