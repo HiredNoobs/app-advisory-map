@@ -8,6 +8,7 @@ from typing import Any, NoReturn
 import pytest
 from conftest import Origin, record
 
+from advisory_map.advisories import releases
 from advisory_map.advisories.cvelist import (
     Advisory,
     CveList,
@@ -20,10 +21,12 @@ from advisory_map.advisories.cvelist import (
     severity,
 )
 from advisory_map.findings import Severity
-from advisory_map.inventory.mapping import Installed, Product
+from advisory_map.inventory.mapping import Installed, Product, ReleaseSource
 
 VAULT = Product("hashicorp", "vault")
 CONSUL = Product("hashicorp", "consul")
+RELEASES = ReleaseSource("git", "https://github.com/hashicorp/vault")
+PUBLISHED = releases.Index(frozenset({RELEASES}), {RELEASES: ("v2.1.2", "v2.1.3", "v2.1.4", "v2.1.5", "v2.2.0")})
 DAY = 86400
 
 
@@ -282,19 +285,30 @@ def test_match() -> None:
                 "CVE-2026-0006": Advisory(None, (by_default,)),
                 # ...and an ADP's range confirms it.
                 "CVE-2026-0007": Advisory(None, (by_default, {"versions": affected("2.1.4")})),
+                # The last affected version, rather than the first fixed one.
+                "CVE-2026-0008": Advisory(
+                    None, ({"versions": [{"version": "0", "lessThanOrEqual": "2.1.3", "status": "affected"}]},)
+                ),
+                # Fixed in a version not released yet.
+                "CVE-2026-0009": Advisory(None, ({"versions": affected("2.3.0")},)),
             }
         },
     )
     unmatched: Counter[str] = Counter()
-    vault = Installed("software", "vault/vault-0/vault", "vault", VAULT, None, "2.1.2")
-    findings = list(match([vault], index, unmatched))
+    vault = Installed("software", "vault/vault-0/vault", "vault", VAULT, None, "2.1.2", RELEASES)
+    findings = list(match([vault], index, unmatched, PUBLISHED))
+    # Each fix is the first release the record doesn't affect: never a version it names but isn't released.
     assert [(f.cve, f.severity, f.fixed_version, f.status) for f in findings] == [
         ("CVE-2026-0001", "high", "2.1.3", "fix-available"),
-        ("CVE-2026-0003", "unknown", "", "open"),
+        ("CVE-2026-0003", "unknown", "2.1.3", "fix-available"),
         ("CVE-2026-0005", "unknown", "2.1.5", "fix-available"),
         ("CVE-2026-0006", "unknown", "", "unconfirmed"),
         ("CVE-2026-0007", "unknown", "2.1.4", "fix-available"),
+        ("CVE-2026-0008", "unknown", "2.1.4", "fix-available"),
+        ("CVE-2026-0009", "unknown", "", "open"),
     ]
+    # Without releases to check against, none is known to be fixed.
+    assert {f.status for f in match([vault], index, Counter())} == {"open", "unconfirmed"}
     assert (findings[0].target, findings[0].namespace, findings[0].package) == (
         "vault/vault-0/vault",
         "vault",
@@ -309,5 +323,7 @@ def test_match() -> None:
         "CVE-2026-0003",
         "CVE-2026-0005",
         "CVE-2026-0007",
+        "CVE-2026-0008",
+        "CVE-2026-0009",
     }
     assert bounded(vault, None) == set()

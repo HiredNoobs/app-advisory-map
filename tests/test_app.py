@@ -18,6 +18,12 @@ from advisory_map.metrics import Collector
 
 PROMETHEUS_URL = "http://prometheus:9090"
 OSV_URL = "http://osv"
+# Vault's releases, as an image's tags in a registry.
+RELEASES = 'releases = "registry:registry.test/hashicorp/vault"'
+
+
+def vault_releases(fake_http: FakeHttp, *tags: str) -> None:
+    fake_http.routes["https://registry.test/v2/hashicorp/vault/tags/list"] = response({"tags": list(tags)})
 
 
 class FakePrometheus:
@@ -133,6 +139,7 @@ def test_run_once(app: App) -> None:
         ({"feed": "cvelist"}, 1000),
         ({"feed": "osv"}, 1000),
         ({"feed": "cwe"}, 1000),
+        ({"feed": "releases"}, 1000),
     ]
     assert metrics["advisory_map_match_last_success_timestamp_seconds"] == [({}, 1000)]
 
@@ -163,7 +170,7 @@ def test_findings_stay_while_the_feeds_refresh(app: App, monkeypatch: pytest.Mon
     monkeypatch.setattr(Feed, "refresh", lambda feed, now: during.append(len(restarted.findings)))
     restarted.run_once(1000 + 2 * 86400)
     # Each feed was due: the findings from the copies on disk were there while it refreshed.
-    assert during == [2, 2, 2, 2, 2]
+    assert during == [2, 2, 2, 2, 2, 2]
 
 
 def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:
@@ -173,9 +180,12 @@ def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:
     assert [labels["cve"] for labels, _ in scrape(app)["advisory_map_vulnerability_info"]] == ["CVE-2026-0002"]
 
 
-def test_cve_records(env: dict[str, str], origin: Origin, tmp_path: Path) -> None:
+def test_cve_records(env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path) -> None:
     mapping = tmp_path / "mapping.toml"
-    mapping.write_text('[[software]]\nquery = "vault_build_info"\nvendor = "HashiCorp"\nproduct = "Vault"\n')
+    mapping.write_text(
+        f'[[software]]\nquery = "vault_build_info"\nvendor = "HashiCorp"\nproduct = "Vault"\n{RELEASES}\n'
+    )
+    vault_releases(fake_http, "2.1.2", "2.1.3")
     origin.commit(
         # Its CVSS severity, dated, replaces Debian's urgency.
         record("CVE-2026-0001", product="openssl", cna_cvss={"cvssV3_1": {"baseSeverity": "CRITICAL"}}),
@@ -206,6 +216,7 @@ def test_cve_records(env: dict[str, str], origin: Origin, tmp_path: Path) -> Non
     assert ({"target_kind": "software", "target": "host-2"}, 1.0) in metrics["advisory_map_inventory_packages"]
     assert metrics["advisory_map_unmatched_records"] == [({"source": "cve.org", "reason": "git"}, 1.0)]
     assert ({"feed": "cvelist"}, 2.0) in metrics["advisory_map_feed_records"]
+    assert ({"feed": "releases"}, 2.0) in metrics["advisory_map_feed_records"]
 
 
 def osv_record(cve: str, fixed: str, **fields: Any) -> dict[str, Any]:
@@ -227,7 +238,7 @@ def osv_record(cve: str, fixed: str, **fields: Any) -> dict[str, Any]:
 
 def test_osv_and_unmapped_images(env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path) -> None:
     mapping = tmp_path / "mapping.toml"
-    mapping.write_text("""
+    mapping.write_text(f"""
 [images]
 query = "kube_pod_container_info"
 
@@ -238,7 +249,9 @@ product = "Vault"
 ecosystem = "Go"
 package = "github.com/hashicorp/vault"
 images = "^hashicorp/vault:"
+{RELEASES}
 """)
+    vault_releases(fake_http, "2.1.2", "2.1.4", "2.2.0")
     upto = [{"version": "0", "lessThan": "2.2.0", "status": "affected"}]
     origin.commit(
         # OSV has records for these two: its ranges decide.
@@ -276,19 +289,22 @@ def test_bounded_cve_records_decide_over_open_osv_ranges(
 ) -> None:
     # Two entries for one installation, one per product name: the bound counts for the installation.
     mapping = tmp_path / "mapping.toml"
-    mapping.write_text("""
+    mapping.write_text(f"""
 [[software]]
 query = "vault_build_info"
 vendor = "HashiCorp"
 product = "Vault"
 ecosystem = "Go"
 package = "github.com/hashicorp/vault"
+{RELEASES}
 
 [[software]]
 query = "vault_build_info"
 vendor = "HashiCorp"
 product = "Vault Enterprise"
+{RELEASES}
 """)
+    vault_releases(fake_http, "2.1.2", "2.2.0")
     origin.commit(
         # Fixed before the installed version (v2.1.2).
         record(

@@ -12,6 +12,8 @@ Advisories are downloaded whole and matched locally:
   ...), for the packages in the mapping. Where it has records for a CVE in a package, its ranges decide.
 - **CISA KEV**: flags matches known to be exploited.
 - **MITRE's [CWE](https://cwe.mitre.org) catalogue**: names the weaknesses the records cite.
+- **Releases**: the tags of the repositories and images the mapping names, so a CVE List or OSV
+  finding's fix is a release that exists ([fixes](docs/mapping.md#fixes)).
 
 Each feed's last good copy is kept in `DATA_DIR`; a failed or invalid download keeps using it. Feeds
 are read a record at a time, so memory stays small (~50 MB with the full Debian tracker). The CVE List
@@ -36,7 +38,8 @@ ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency
   for it.
 - **Outbound HTTPS** to the feeds (security-tracker.debian.org, github.com,
   osv-vulnerabilities.storage.googleapis.com, www.cisa.gov, cwe.mitre.org), or mirrors for the CVE List
-  and OSV (`CVELIST_URL`, `OSV_URL`). Nothing about what's installed is sent.
+  and OSV (`CVELIST_URL`, `OSV_URL`), and to the git hosts and registries the mapping's `releases`
+  name. Nothing about what's installed is sent: only the mapped names are looked up.
 - **A writable `DATA_DIR`**, 2 GB to be safe: the CVE List's clone (twice its size while it's
   repacked), the Debian tracker, and each mapped ecosystem's archive while it's first read.
 
@@ -65,7 +68,7 @@ report the running images it doesn't cover.
 | `LISTEN_PORT` | `8080` | `/metrics` |
 | `MATCH_INTERVAL` | `15m` | how often versions are read and matched |
 | `FEED_REFRESH` | `24h` | how often the feeds are refreshed (conditional GETs, git fetches, changed records) |
-| `FEED_REFRESH_<FEED>` | `FEED_REFRESH` | per feed: `DEBIAN`, `CVELIST`, `OSV`, `KEV`, `CWE` |
+| `FEED_REFRESH_<FEED>` | `FEED_REFRESH` | per feed: `DEBIAN`, `CVELIST`, `OSV`, `KEV`, `CWE`, `RELEASES` |
 
 ## Metrics
 
@@ -82,7 +85,7 @@ report the running images it doesn't cover.
 The package `advisory_map` (tests mirror it):
 
 - `inventory/`: what's installed, from Prometheus (`debian.py` hosts and packages, `mapping.py` everything else).
-- `advisories/`: a module per feed (`debian.py`, `cvelist.py`, `osv.py`, `kev.py`, `cwe.py`), each with its matcher; `feed.py` is their base, `ranges.py` the version ranges they match.
+- `advisories/`: a module per feed (`debian.py`, `cvelist.py`, `osv.py`, `kev.py`, `cwe.py`, `releases.py`), each with its matcher; `feed.py` is their base, `ranges.py` the version ranges they match.
 - `common/`: HTTP and streamed JSON.
 - `app.py` the match loop, `findings.py` its result, `metrics.py` `/metrics`, `config.py` the settings.
 

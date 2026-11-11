@@ -72,11 +72,6 @@ class Range(NamedTuple):
                 return False
         return True
 
-    @property
-    def fixed(self) -> str:
-        """The first version past an exclusive upper bound: the fix."""
-        return self.upper if self.upper is not None and not self.upper_inclusive else ""
-
 
 def _constraints(text: str) -> Range:
     """GitHub's form: ">= 1.0.0, < 1.2.3", "< 2.0", "= 1.4"."""
@@ -137,9 +132,8 @@ def to_range(entry: dict[str, Any]) -> Range:
     return Range(version, True, version, True)
 
 
-def status(affected: dict[str, Any], version: str) -> tuple[str, str]:
-    """The status (affected, unaffected, unconfirmed or unknown) one `affected` entry gives version, and
-    the fix if known.
+def status(affected: dict[str, Any], version: str) -> str:
+    """The status (affected, unaffected, unconfirmed or unknown) one `affected` entry gives version.
 
     The first `versions` entry containing it decides, else the entry's defaultStatus. A default of
     affected beside only affected versions is unconfirmed: records list affected releases that way and
@@ -150,11 +144,11 @@ def status(affected: dict[str, Any], version: str) -> tuple[str, str]:
     for entry in entries:
         bounds = to_range(entry)
         if bounds.contains(installed):
-            return entry.get("status", "unknown"), bounds.fixed
+            return str(entry.get("status", "unknown"))
     default = affected.get("defaultStatus") or "unknown"
     if default == "affected" and entries and all(entry.get("status") == "affected" for entry in entries):
-        return "unconfirmed", ""
-    return default, ""
+        return "unconfirmed"
+    return str(default)
 
 
 def bounded(affected: dict[str, Any]) -> bool:
@@ -175,22 +169,20 @@ def bounded(affected: dict[str, Any]) -> bool:
     return any(map(ends, affected.get("versions", [])))
 
 
-def _osv_range(events: list[dict[str, str]], installed: Version) -> tuple[bool, str]:
-    """Whether a SEMVER or ECOSYSTEM range includes the version, and its fix: OSV's evaluation, over the
-    events in version order (introduced "0" first)."""
+def _osv_range(events: list[dict[str, str]], installed: Version) -> bool:
+    """Whether a SEMVER or ECOSYSTEM range includes the version: OSV's evaluation, over the events in
+    version order (introduced "0" first)."""
     ordered = sorted(
-        ((comparable(value), kind, value) for event in events for kind, value in event.items() if kind != "limit"),
+        ((comparable(value), kind) for event in events for kind, value in event.items() if kind != "limit"),
         key=lambda event: event[0],
     )
     affected = False
-    for version, kind, _ in ordered:
+    for version, kind in ordered:
         if kind == "introduced" and installed >= version:
             affected = True
         elif (kind == "fixed" and installed >= version) or (kind == "last_affected" and installed > version):
             affected = False
-    if not affected:
-        return False, ""
-    return True, next((value for version, kind, value in ordered if kind == "fixed" and version > installed), "")
+    return affected
 
 
 def _osv_ends(bounds: dict[str, Any]) -> bool:
@@ -212,8 +204,8 @@ def osv_bounded(affected: dict[str, Any]) -> bool:
     return all(map(_osv_ends, found)) if found else bool(affected.get("versions"))
 
 
-def osv_status(affected: dict[str, Any], version: str, ecosystem: str) -> tuple[bool, str]:
-    """Whether one OSV `affected` entry includes version, and the fix if known.
+def osv_status(affected: dict[str, Any], version: str, ecosystem: str) -> bool:
+    """Whether one OSV `affected` entry includes version.
 
     Its ranges decide where they can be ordered (SEMVER, and ECOSYSTEM in the ecosystems above); its list
     of affected versions does for the rest. A range neither can decide (GIT, or an unordered ECOSYSTEM
@@ -221,18 +213,10 @@ def osv_status(affected: dict[str, Any], version: str, ecosystem: str) -> tuple[
     """
     listed = affected.get("versions", [])
     found = _bare(version) in {_bare(item) for item in listed}
-    fixes, unordered = [], []
     for bounds in affected.get("ranges", []):
         kind = bounds.get("type", "")
         if kind == "SEMVER" or (kind == "ECOSYSTEM" and ecosystem in _ORDERED_ECOSYSTEMS):
-            in_range, fixed = _osv_range(bounds.get("events", []), comparable(version))
-            found = found or in_range
-            fixes.append(fixed)
+            found = _osv_range(bounds.get("events", []), comparable(version)) or found
         elif not listed:
             raise Unmatched(kind.lower() or "unspecified")
-        elif kind == "ECOSYSTEM":  # a GIT range's fixes are commits, not versions
-            unordered += [event["fixed"] for event in bounds.get("events", []) if "fixed" in event]
-    if not found:
-        return False, ""
-    # Else an unordered range's fix, if there's just one: of several, which applies isn't known.
-    return True, next(filter(None, fixes), unordered[0] if len(set(unordered)) == 1 else "")
+    return found

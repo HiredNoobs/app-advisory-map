@@ -1,16 +1,21 @@
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from advisory_map.inventory.mapping import (
+    DEFAULT_RELEASE_REGEX,
     Found,
     Installed,
     Package,
     Product,
+    ReleaseSource,
     find,
     load_mapping,
 )
+
+VAULT_RELEASES = ReleaseSource("registry", "docker.io/hashicorp/vault")
 
 MAPPING = """
 [images]
@@ -33,6 +38,8 @@ package = "github.com/hashicorp/vault"
 version_label = "image"
 version_regex = '(?<=:)[0-9.]+'
 target_labels = ["namespace", "pod", "container"]
+releases = "registry:docker.io/hashicorp/vault"
+release_regex = '^([0-9.]+)$'
 
 [[software]]
 query = 'gotk_resource_info{customresource_kind="HelmRelease", name="cert-manager"}'
@@ -60,6 +67,8 @@ def test_load_mapping(tmp_path: Path) -> None:
         Package("Go", "github.com/hashicorp/vault"),
     )
     assert (vault.kind, vault.target_labels) == ("software", ("namespace", "pod", "container"))
+    assert (vault.releases, vault.release_regex.pattern) == (VAULT_RELEASES, "^([0-9.]+)$")
+    assert (talos.releases, talos.release_regex) == (None, DEFAULT_RELEASE_REGEX)
     assert cert_manager.product is None and cert_manager.images is not None
     assert (mapping.images_query, mapping.image_label) == ("kube_pod_container_info", "image")
 
@@ -71,6 +80,8 @@ def test_load_mapping(tmp_path: Path) -> None:
         '[[software]]\nquery = "x"\nvendor = "v"',
         '[[software]]\nquery = "x"\necosystem = "Go"',
         '[[software]]\nquery = "x"\nvendor = "v"\nproduct = "p"\nversion_regex = "("',
+        '[[software]]\nquery = "x"\nvendor = "v"\nproduct = "p"\nreleases = "github:hashicorp/vault"',
+        '[[software]]\nquery = "x"\nvendor = "v"\nproduct = "p"\nreleases = "git:"',
     ],
 )
 def test_load_mapping_rejects(tmp_path: Path, text: str) -> None:
@@ -132,6 +143,8 @@ def test_find(tmp_path: Path) -> None:
                 Product("hashicorp", "vault"),
                 Package("Go", "github.com/hashicorp/vault"),
                 "2.1.2",
+                VAULT_RELEASES,
+                re.compile("^([0-9.]+)$"),
             ),
         ],
         ["hashicorp/vault:latest", "redis:8.2"],

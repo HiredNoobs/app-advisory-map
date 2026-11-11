@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import quote
 
-from advisory_map.advisories import ranges
+from advisory_map.advisories import ranges, releases
 from advisory_map.advisories.feed import Feed, write_atomic
 from advisory_map.common import http
 from advisory_map.findings import Finding, Severity, cwe_ids
@@ -215,28 +215,30 @@ def covered(item: Installed, index: Index | None) -> dict[str, bool]:
     return found
 
 
-def _merged(verdicts: Iterable[tuple[bool, str]]) -> tuple[bool, str]:
-    """Whether any verdict includes the version, and the first fix among those that do."""
-    fixes = [fix for found, fix in verdicts if found]
-    return bool(fixes), next(filter(None, fixes), "")
-
-
-def _status(advisory: Advisory, version: str, ecosystem: str, unmatched: Counter[str]) -> tuple[bool, str]:
-    """Whether the record includes the version, and the fix if known."""
+def _includes(advisory: Advisory, version: str, ecosystem: str, unmatched: Counter[str] | None = None) -> bool:
+    """Whether the record includes the version. One whose ranges can't be compared doesn't: its reason is
+    counted in unmatched."""
     try:
-        return _merged(ranges.osv_status(entry, version, ecosystem) for entry in advisory.affected)
+        return any([ranges.osv_status(entry, version, ecosystem) for entry in advisory.affected])
     except ranges.Unmatched as reason:
-        unmatched[str(reason)] += 1
-        return False, ""
+        if unmatched is not None:
+            unmatched[str(reason)] += 1
+        return False
 
 
-def match(installed: Iterable[Installed], index: Index | None, unmatched: Counter[str]) -> Iterator[Finding]:
+def match(
+    installed: Iterable[Installed],
+    index: Index | None,
+    unmatched: Counter[str],
+    published: releases.Index | None = None,
+) -> Iterator[Finding]:
     """A finding per vulnerability that includes an installation's version, its records merged; ranges
-    that can't be compared are counted in unmatched by reason.
+    that can't be compared are counted in unmatched by reason. The fix is the first published release
+    past the installed version that none of the deciding records includes.
 
     Where a vulnerability has records that say where its affected versions end, they decide over those
     that leave a range open: a range is left open when the fix isn't a version of the package, as for
-    Grafana 13 or Vault 2 as Go modules, while another record may name the release that fixed it.
+    Grafana 13 or Vault 2 as Go modules, while another record may say where it ends.
     """
     if index is None:
         return
@@ -244,14 +246,18 @@ def match(installed: Iterable[Installed], index: Index | None, unmatched: Counte
         if item.package is None:
             continue
         ecosystem = item.package.ecosystem
+        newer = releases.newer(item, published)
         vulnerabilities: dict[str, list[Advisory]] = {}
         for advisory in index.advisories.get(item.package, {}).values():
             vulnerabilities.setdefault(advisory.key, []).append(advisory)
         for key, records in vulnerabilities.items():
             deciding = [record for record in records if record.bounded] or records
-            found, fixed = _merged(_status(record, item.version, ecosystem, unmatched) for record in deciding)
-            if not found:
+            # Every record, not just up to the first that includes it: each one's unmatched ranges count.
+            if not any([_includes(record, item.version, ecosystem, unmatched) for record in deciding]):
                 continue
+            fixed = releases.first_fix(
+                newer, lambda version: any(_includes(record, version, ecosystem) for record in deciding)
+            )
             severity = max(
                 (record.severity for record in records if record.severity),
                 key=lambda severity: severity.updated,
