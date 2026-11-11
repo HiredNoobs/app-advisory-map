@@ -18,6 +18,7 @@ from bisect import bisect_right
 from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+from functools import cache
 from operator import itemgetter
 from pathlib import Path
 
@@ -44,25 +45,25 @@ _GIT_TIMEOUT = 120
 @dataclass(frozen=True)
 class Index:
     sources: frozenset[ReleaseSource]
-    # source -> its tags, as listed
+    # source -> its release tags, as listed
     tags: dict[ReleaseSource, tuple[str, ...]]
-    # (source, release regex) -> its releases, parsed once per index
-    _releases: dict[tuple[ReleaseSource, re.Pattern[str]], list[tuple[Version, str]]] = field(
+    # source -> its releases, parsed once per index
+    _releases: dict[ReleaseSource, list[tuple[Version, str]]] = field(
         init=False, default_factory=dict, compare=False, repr=False
     )
 
-    def releases(self, source: ReleaseSource, regex: re.Pattern[str]) -> list[tuple[Version, str]]:
-        """The source's releases, oldest first, each version as regex cuts it from a tag: one per version,
-        however many of its tags name it (v1.2.3 and 1.2.3)."""
-        key = (source, regex)
-        if key not in self._releases:
+    def releases(self, source: ReleaseSource) -> list[tuple[Version, str]]:
+        """The source's releases, oldest first, each version as its pattern cuts it from a tag: one per
+        version, however many of its tags name it (v1.2.3 and 1.2.3)."""
+        if source not in self._releases:
+            regex = re.compile(source.pattern)
             by_version: dict[Version, str] = {}
             for tag in self.tags.get(source, ()):
                 if (version := cut(regex, tag)) is not None:
                     with suppress(ranges.Unmatched):
                         by_version.setdefault(ranges.comparable(version), version)
-            self._releases[key] = sorted(by_version.items())
-        return self._releases[key]
+            self._releases[source] = sorted(by_version.items())
+        return self._releases[source]
 
     def to_json(self) -> bytes:
         return json.dumps(
@@ -77,7 +78,7 @@ class Index:
         index = json.loads(raw)
         return cls(
             frozenset(ReleaseSource(*source) for source in index["sources"]),
-            {ReleaseSource(kind, name): tuple(tags) for kind, name, tags in index["tags"]},
+            {ReleaseSource(*source): tuple(tags) for *source, tags in index["tags"]},
         )
 
 
@@ -155,10 +156,16 @@ class Releases(Feed[Index]):
         return self.data is not None and self.data.sources != self.sources
 
     def _fetch(self) -> None:
-        tags = {source: tuple(_LISTS[source.kind](source.name)) for source in sorted(self.sources)}
+        """Lists each repository or image once, however many patterns read it, and keeps the tags each
+        source's pattern matches: an image can have tens of thousands of build tags."""
+        listed = cache(lambda kind, name: _LISTS[kind](name))
+        tags = {}
+        for source in sorted(self.sources):
+            release = re.compile(source.pattern)
+            tags[source] = tuple(tag for tag in listed(source.kind, source.name) if release.search(tag))
         self.data = Index(self.sources, tags)
         write_atomic(self.path, self.data.to_json())
-        log.info("feed %s: %d tags of %d sources", self.name, self.records(), len(self.sources))
+        log.info("feed %s: %d release tags of %d sources", self.name, self.records(), len(self.sources))
 
 
 def newer(item: Installed, index: Index | None) -> list[str]:
@@ -170,7 +177,7 @@ def newer(item: Installed, index: Index | None) -> list[str]:
         installed = ranges.comparable(item.version)
     except ranges.Unmatched:
         return []
-    found = index.releases(item.releases, item.release_regex)
+    found = index.releases(item.releases)
     return [version for _, version in found[bisect_right(found, installed, key=itemgetter(0)) :]]
 
 

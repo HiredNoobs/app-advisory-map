@@ -58,7 +58,7 @@ product = "grafana"
 | `kind` | `software` | the findings' `target_kind` |
 | `images` | (none) | a regex of the images the entry covers when its series don't carry them (an `image` label) |
 | `releases` | (none) | where its releases are published, for [fixes](#fixes): `git:<repository URL>` (its tags) or `registry:<host>/<image>` (the image's tags) |
-| `release_regex` | `^v?(\d+(?:\.\d+)*)$` | a release's version in its tag, as `version_regex` reads it; tags it doesn't match aren't releases |
+| `release_regex` | `^v?(\d+\.\d+\.\d+)$` | a release's version in its tag, as `version_regex` reads it; tags it doesn't match aren't releases |
 
 An entry needs a product, a package, or both. A series' `namespace` label, if it has one, becomes the
 findings' `namespace`.
@@ -82,8 +82,11 @@ never names a fix.
 
 Releases are tags, as a dependency updater reads them: git's ref list for a repository (any git host;
 use the app's repository for a Helm release, not its chart's), or the registry API for an image,
-anonymously. The default `release_regex` keeps plain versions (`1.2.3`, `v1.2.3`), so prereleases and
-variant tags (`1.2.3-alpine`) aren't offered as fixes; set it to read a project's own scheme.
+anonymously. The default `release_regex` keeps plain versions (`1.2.3`, `v1.2.3`), so prereleases,
+variant tags (`1.2.3-alpine`), floating tags (`1.2`) and build tags (`9799770991`) aren't offered as
+fixes; set it to the variant an entry runs (`'^(\d+\.\d+\.\d+)-alpine$'`) or a project's own scheme.
+Only the tags it matches are kept, so an image with thousands of build tags costs no more than its
+releases, though listing them still takes a request per thousand tags.
 
 ## Product and package names
 

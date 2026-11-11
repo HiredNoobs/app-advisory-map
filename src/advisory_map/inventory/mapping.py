@@ -25,17 +25,22 @@ class Package(NamedTuple):
     name: str
 
 
+# A release's tag: a plain version, not a pre-release, a variant, a floating or a build tag (1.2.3, v1.2.3;
+# not 1.2.3-rc.1, 1.2.3-alpine, 1.2 or 9799770991).
+DEFAULT_RELEASE_PATTERN = r"^v?(\d+\.\d+\.\d+)$"
+
+
 class ReleaseSource(NamedTuple):
-    """Where the published releases are listed: a git repository's tags (`git`, its URL), or an image's
-    tags in its registry (`registry`, host/repository)."""
+    """Where the published releases are listed, a git repository's tags (`git`, its URL) or an image's
+    tags in its registry (`registry`, host/repository), and which tags are releases: those pattern
+    matches, its first group (or its whole match, without groups) the version."""
 
     kind: str
     name: str
+    pattern: str = DEFAULT_RELEASE_PATTERN
 
 
 RELEASE_KINDS = ("git", "registry")
-# A release's tag: a plain version, not a pre-release or a variant (1.2.3, v1.2.3; not 1.2.3-rc.1, 1.2-alpine).
-DEFAULT_RELEASE_REGEX = re.compile(r"^v?(\d+(?:\.\d+)*)$")
 
 
 @dataclass(frozen=True)
@@ -49,9 +54,8 @@ class Software:
     kind: str = "software"
     # Images it covers though its series don't name them (an app found by its chart's version).
     images: re.Pattern[str] | None = None
-    # Where its releases are listed (its fixes are among them), and a release's version in its tag.
+    # Where its releases are listed: its fixes are among them.
     releases: ReleaseSource | None = None
-    release_regex: re.Pattern[str] = DEFAULT_RELEASE_REGEX
 
 
 @dataclass(frozen=True)
@@ -72,7 +76,6 @@ class Installed:
     version: str
     # Its entry's.
     releases: ReleaseSource | None = None
-    release_regex: re.Pattern[str] = DEFAULT_RELEASE_REGEX
 
 
 class Found(NamedTuple):
@@ -88,11 +91,13 @@ def _pair[T](entry: dict[str, Any], make: Callable[[str, str], T], first: str, s
     return make(entry[first], entry[second])
 
 
-def _release_source(text: str) -> ReleaseSource:
-    kind, _, name = text.partition(":")
+def _release_source(entry: dict[str, Any]) -> ReleaseSource | None:
+    if "releases" not in entry:
+        return None
+    kind, _, name = entry["releases"].partition(":")
     if kind not in RELEASE_KINDS or not name:
-        raise ValueError(f"releases must be git:<url> or registry:<host>/<repository>, not {text!r}")
-    return ReleaseSource(kind, name)
+        raise ValueError(f"releases must be git:<url> or registry:<host>/<repository>, not {entry['releases']!r}")
+    return ReleaseSource(kind, name, re.compile(entry.get("release_regex", DEFAULT_RELEASE_PATTERN)).pattern)
 
 
 def _software(entry: dict[str, Any]) -> Software:
@@ -109,8 +114,7 @@ def _software(entry: dict[str, Any]) -> Software:
         target_labels=tuple(entry.get("target_labels", ["instance"])),
         kind=entry.get("kind", "software"),
         images=re.compile(entry["images"]) if "images" in entry else None,
-        releases=_release_source(entry["releases"]) if "releases" in entry else None,
-        release_regex=re.compile(entry["release_regex"]) if "release_regex" in entry else DEFAULT_RELEASE_REGEX,
+        releases=_release_source(entry),
     )
 
 
@@ -162,14 +166,7 @@ def find(prometheus: PrometheusAPI, mapping: Mapping) -> Found:
                 namespace = labels.get("namespace", "")
                 installed.add(
                     Installed(
-                        software.kind,
-                        target,
-                        namespace,
-                        software.product,
-                        software.package,
-                        version,
-                        software.releases,
-                        software.release_regex,
+                        software.kind, target, namespace, software.product, software.package, version, software.releases
                     )
                 )
                 if image := labels.get(mapping.image_label):
