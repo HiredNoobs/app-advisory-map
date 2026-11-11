@@ -14,6 +14,7 @@ from advisory_map.advisories.debian import DebianTracker
 from advisory_map.advisories.feed import Feed
 from advisory_map.advisories.kev import Kev
 from advisory_map.advisories.osv import Osv
+from advisory_map.advisories.releases import Releases
 from advisory_map.config import Settings
 from advisory_map.findings import Finding
 from advisory_map.inventory.debian import DebianHost, debian_hosts
@@ -64,7 +65,8 @@ class App:
             settings.data_dir, {item.package for item in self.mapping.software if item.package}, settings.osv_url
         )
         self.cwe = Cwe(settings.data_dir)
-        self.feeds: tuple[Feed, ...] = (self.debian, self.kev, self.cvelist, self.osv, self.cwe)
+        self.releases = Releases(settings.data_dir, {item.releases for item in self.mapping.software if item.releases})
+        self.feeds: tuple[Feed, ...] = (self.debian, self.kev, self.cvelist, self.osv, self.cwe, self.releases)
         if unknown := settings.feed_refresh_overrides.keys() - {feed.name for feed in self.feeds}:
             raise ValueError(f"FEED_REFRESH_ for unknown feeds: {', '.join(sorted(unknown))}")
         self.hosts: list[DebianHost] = []
@@ -99,12 +101,12 @@ class App:
             *debian.match(self.hosts, self.debian.data or {}),
             *(
                 finding
-                for finding in osv.match(self.software, self.osv.data, unmatched["osv"])
+                for finding in osv.match(self.software, self.osv.data, unmatched["osv"], self.releases.data)
                 if _finding_key(finding) not in by_cvelist
             ),
             *(
                 finding
-                for finding in cvelist.match(self.software, self.cvelist.data, unmatched["cve.org"])
+                for finding in cvelist.match(self.software, self.cvelist.data, unmatched["cve.org"], self.releases.data)
                 if _finding_key(finding) not in by_osv
             ),
         ]

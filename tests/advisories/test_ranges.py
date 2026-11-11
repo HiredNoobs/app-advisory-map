@@ -113,14 +113,14 @@ AFFECTED = {
 @pytest.mark.parametrize(
     "version, expected",
     [
-        ("1.20.4", ("affected", "1.20.5")),
-        ("1.20.5", ("unaffected", "")),
-        ("v1.21.0", ("affected", "1.21.2")),
-        ("1.22.0", ("unaffected", "")),
-        ("1.19.9", ("unaffected", "")),
+        ("1.20.4", "affected"),
+        ("1.20.5", "unaffected"),
+        ("v1.21.0", "affected"),
+        ("1.22.0", "unaffected"),
+        ("1.19.9", "unaffected"),
     ],
 )
-def test_status(version: str, expected: tuple[str, str]) -> None:
+def test_status(version: str, expected: str) -> None:
     assert status(AFFECTED, version) == expected
 
 
@@ -139,7 +139,7 @@ def test_status_unparsable(entry: dict[str, str]) -> None:
 
 
 def test_status_without_a_default() -> None:
-    assert status({"versions": []}, "1.0") == ("unknown", "")
+    assert status({"versions": []}, "1.0") == "unknown"
 
 
 def test_status_affected_by_default() -> None:
@@ -147,9 +147,9 @@ def test_status_affected_by_default() -> None:
         "versions": [{"version": "2.0", "lessThan": "*", "status": "unaffected"}],
         "defaultStatus": "affected",
     }
-    assert status(fixed_in_2, "1.9") == ("affected", "")
-    assert status(fixed_in_2, "2.1") == ("unaffected", "")
-    assert status({"versions": [], "defaultStatus": "affected"}, "1.0") == ("affected", "")
+    assert status(fixed_in_2, "1.9") == "affected"
+    assert status(fixed_in_2, "2.1") == "unaffected"
+    assert status({"versions": [], "defaultStatus": "affected"}, "1.0") == "affected"
 
 
 def test_status_affected_by_default_beside_affected_versions() -> None:
@@ -157,8 +157,8 @@ def test_status_affected_by_default_beside_affected_versions() -> None:
         "versions": [{"version": "1.13.0", "lessThanOrEqual": "1.13.4", "status": "affected"}],
         "defaultStatus": "affected",
     }
-    assert status(listed, "1.13.2") == ("affected", "")
-    assert status(listed, "1.15.0") == ("unconfirmed", "")
+    assert status(listed, "1.13.2") == "affected"
+    assert status(listed, "1.15.0") == "unconfirmed"
 
 
 def osv(*events: dict[str, str], kind: str = "SEMVER", versions: list[str] | None = None) -> dict[str, Any]:
@@ -172,28 +172,28 @@ TWICE = osv({"introduced": "1.3.0"}, {"fixed": "1.3.1"}, {"introduced": "0"}, {"
 @pytest.mark.parametrize(
     "entry, version, expected",
     [
-        (TWICE, "1.2.0", (True, "1.2.5")),
-        (TWICE, "v1.2.5", (False, "")),
-        (TWICE, "1.2.7", (False, "")),
-        (TWICE, "1.3.0", (True, "1.3.1")),
-        (TWICE, "1.3.1", (False, "")),
-        (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), "1.4", (True, "")),
-        (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), "1.4.1", (False, "")),
-        (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), "0.9", (False, "")),
-        (osv({"introduced": "0"}, {"fixed": "1.2.0"}), "1.2.0-rc.1", (True, "1.2.0")),
+        (TWICE, "1.2.0", True),
+        (TWICE, "v1.2.5", False),
+        (TWICE, "1.2.7", False),
+        (TWICE, "1.3.0", True),
+        (TWICE, "1.3.1", False),
+        (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), "1.4", True),
+        (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), "1.4.1", False),
+        (osv({"introduced": "1.0"}, {"last_affected": "1.4"}), "0.9", False),
+        (osv({"introduced": "0"}, {"fixed": "1.2.0"}), "1.2.0-rc.1", True),
         # Go's ECOSYSTEM ranges are semver.
-        (osv({"introduced": "0"}, {"fixed": "0.36.0"}, kind="ECOSYSTEM"), "v0.35.0", (True, "0.36.0")),
+        (osv({"introduced": "0"}, {"fixed": "0.36.0"}, kind="ECOSYSTEM"), "v0.35.0", True),
     ],
 )
-def test_osv_status(entry: dict[str, Any], version: str, expected: tuple[bool, str]) -> None:
+def test_osv_status(entry: dict[str, Any], version: str, expected: bool) -> None:
     assert osv_status(entry, version, "Go") == expected
 
 
 def test_osv_status_unordered_ecosystem() -> None:
     # PyPI's ordering (PEP 440) isn't dpkg's: the record's list of affected versions decides.
     entry = osv({"introduced": "0"}, {"fixed": "0.31.0"}, kind="ECOSYSTEM", versions=["0.30.0", "0.30.0rc1"])
-    assert osv_status(entry, "0.30.0rc1", "PyPI") == (True, "0.31.0")
-    assert osv_status(entry, "0.31.0", "PyPI") == (False, "")
+    assert osv_status(entry, "0.30.0rc1", "PyPI")
+    assert not osv_status(entry, "0.31.0", "PyPI")
     with pytest.raises(Unmatched, match="ecosystem"):
         osv_status(osv({"introduced": "0"}, {"fixed": "0.31.0"}, kind="ECOSYSTEM"), "0.30.0", "PyPI")
 
@@ -202,7 +202,7 @@ def test_osv_status_git() -> None:
     git = osv({"introduced": "0"}, {"fixed": "8f2e9c1"}, kind="GIT")
     with pytest.raises(Unmatched, match="git"):
         osv_status(git, "1.0", "Go")
-    assert osv_status({**git, "versions": ["1.0"]}, "1.0", "Go") == (True, "")
+    assert osv_status({**git, "versions": ["1.0"]}, "1.0", "Go")
 
 
 @pytest.mark.parametrize(

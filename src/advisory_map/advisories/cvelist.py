@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Any, NamedTuple
 
-from advisory_map.advisories import ranges
+from advisory_map.advisories import ranges, releases
 from advisory_map.advisories.feed import Feed, write_atomic
 from advisory_map.findings import Finding, Severity, cwe_ids
 from advisory_map.inventory.mapping import Installed, Product
@@ -64,6 +64,11 @@ class Advisory(NamedTuple):
         """Whether the record says where its affected versions end: the CNA's entry, or an ADP's that
         adds the bound."""
         return any(map(ranges.bounded, self.affected))
+
+    def affects(self, version: str) -> bool:
+        """Whether an entry (the CNA's or an ADP's) says version is affected; only a default that does
+        isn't enough (unconfirmed)."""
+        return any(ranges.status(affected, version) == "affected" for affected in self.affected)
 
 
 @dataclass(frozen=True)
@@ -349,24 +354,29 @@ def bounded(item: Installed, index: Index | None) -> set[str]:
     return {cve for cve, advisory in index.advisories.get(item.product, {}).items() if advisory.bounded}
 
 
-def match(installed: Iterable[Installed], index: Index | None, unmatched: Counter[str]) -> Iterator[Finding]:
+def match(
+    installed: Iterable[Installed],
+    index: Index | None,
+    unmatched: Counter[str],
+    published: releases.Index | None = None,
+) -> Iterator[Finding]:
     """The CVEs whose affected versions include an installation's; ranges that can't be compared are
-    counted in unmatched by reason."""
+    counted in unmatched by reason. The fix is the first published release past the installed version
+    that the record doesn't affect, in a record that says where its affected versions end."""
     if index is None:
         return
     for item in installed:
         if item.product is None:
             continue
+        newer = releases.newer(item, published)
         for cve, advisory in index.advisories.get(item.product, {}).items():
             try:
-                verdicts = [ranges.status(affected, item.version) for affected in advisory.affected]
+                statuses = {ranges.status(affected, item.version) for affected in advisory.affected}
             except ranges.Unmatched as reason:
                 unmatched[str(reason)] += 1
                 continue
-            statuses = {verdict for verdict, _ in verdicts}
             if "affected" in statuses:
-                # The CNA's and ADPs' entries can differ: the first that names a fix.
-                fixed = next((fix for verdict, fix in verdicts if verdict == "affected" and fix), "")
+                fixed = releases.first_fix(newer, advisory.affects) if advisory.bounded else ""
                 status = "fix-available" if fixed else "open"
             elif "unconfirmed" in statuses:
                 fixed, status = "", "unconfirmed"

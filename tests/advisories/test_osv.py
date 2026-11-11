@@ -8,14 +8,17 @@ from typing import Any
 import pytest
 from conftest import FakeHttp, osv_archive, response
 
+from advisory_map.advisories import releases
 from advisory_map.advisories.osv import Advisory, Index, Osv, covered, match
 from advisory_map.findings import Severity
-from advisory_map.inventory.mapping import Installed, Package
+from advisory_map.inventory.mapping import Installed, Package, ReleaseSource
 
 URL = "http://osv"
 VAULT = Package("Go", "github.com/hashicorp/vault")
 CONSUL = Package("Go", "github.com/hashicorp/consul")
 DAY = 86400
+RELEASES = ReleaseSource("git", "https://github.com/hashicorp/vault")
+PUBLISHED = releases.Index(frozenset({RELEASES}), {RELEASES: ("v2.1.2", "v2.1.3", "v2.1.4", "v2.1.5", "v2.2.0")})
 
 
 def record(
@@ -193,14 +196,31 @@ def test_match() -> None:
             **record("GO-2026-0004"),
             "affected": [{"package": {"ecosystem": "Go", "name": VAULT.name}, "ranges": [{"type": "GIT"}]}],
         },
+        # The last affected version, rather than the first fixed one.
+        {
+            **record("GHSA-0008"),
+            "affected": [
+                {
+                    "package": {"ecosystem": "Go", "name": VAULT.name},
+                    "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"last_affected": "2.1.3"}]}],
+                }
+            ],
+        },
+        # Fixed in a version not released yet.
+        record("GHSA-0009", fixed="2.3.0"),
     )
     unmatched: Counter[str] = Counter()
-    vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2")
-    findings = sorted(match([vault], found, unmatched), key=lambda finding: finding.cve)
+    vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2", RELEASES)
+    findings = sorted(match([vault], found, unmatched, PUBLISHED), key=lambda finding: finding.cve)
+    # Each fix is the first release no deciding record includes: never a version not released yet.
     assert [(f.cve, f.severity, f.fixed_version, f.status, f.cwes) for f in findings] == [
         ("CVE-2026-0001", "medium", "2.1.5", "fix-available", ("CWE-400", "CWE-770")),
         ("GHSA-0002", "unknown", "2.2.0", "fix-available", ()),
+        ("GHSA-0008", "unknown", "2.1.4", "fix-available", ()),
+        ("GHSA-0009", "unknown", "", "open", ()),
     ]
+    # Without releases to check against, none is known to be fixed.
+    assert {f.status for f in match([vault], found, Counter())} == {"open"}
     assert (findings[0].source, findings[0].package, findings[0].severity_updated) == (
         "osv",
         VAULT.name,
@@ -212,6 +232,8 @@ def test_match() -> None:
         "GHSA-0002": True,
         "GHSA-0003": True,
         "GO-2026-0004": False,
+        "GHSA-0008": True,
+        "GHSA-0009": True,
     }
     assert list(match([vault], None, unmatched)) == []
 

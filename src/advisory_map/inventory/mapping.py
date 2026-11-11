@@ -25,6 +25,19 @@ class Package(NamedTuple):
     name: str
 
 
+class ReleaseSource(NamedTuple):
+    """Where the published releases are listed: a git repository's tags (`git`, its URL), or an image's
+    tags in its registry (`registry`, host/repository)."""
+
+    kind: str
+    name: str
+
+
+RELEASE_KINDS = ("git", "registry")
+# A release's tag: a plain version, not a pre-release or a variant (1.2.3, v1.2.3; not 1.2.3-rc.1, 1.2-alpine).
+DEFAULT_RELEASE_REGEX = re.compile(r"^v?(\d+(?:\.\d+)*)$")
+
+
 @dataclass(frozen=True)
 class Software:
     query: str
@@ -36,6 +49,9 @@ class Software:
     kind: str = "software"
     # Images it covers though its series don't name them (an app found by its chart's version).
     images: re.Pattern[str] | None = None
+    # Where its releases are listed (its fixes are among them), and a release's version in its tag.
+    releases: ReleaseSource | None = None
+    release_regex: re.Pattern[str] = DEFAULT_RELEASE_REGEX
 
 
 @dataclass(frozen=True)
@@ -54,6 +70,9 @@ class Installed:
     product: Product | None
     package: Package | None
     version: str
+    # Its entry's.
+    releases: ReleaseSource | None = None
+    release_regex: re.Pattern[str] = DEFAULT_RELEASE_REGEX
 
 
 class Found(NamedTuple):
@@ -67,6 +86,13 @@ def _pair[T](entry: dict[str, Any], make: Callable[[str, str], T], first: str, s
     if first not in entry and second not in entry:
         return None
     return make(entry[first], entry[second])
+
+
+def _release_source(text: str) -> ReleaseSource:
+    kind, _, name = text.partition(":")
+    if kind not in RELEASE_KINDS or not name:
+        raise ValueError(f"releases must be git:<url> or registry:<host>/<repository>, not {text!r}")
+    return ReleaseSource(kind, name)
 
 
 def _software(entry: dict[str, Any]) -> Software:
@@ -83,6 +109,8 @@ def _software(entry: dict[str, Any]) -> Software:
         target_labels=tuple(entry.get("target_labels", ["instance"])),
         kind=entry.get("kind", "software"),
         images=re.compile(entry["images"]) if "images" in entry else None,
+        releases=_release_source(entry["releases"]) if "releases" in entry else None,
+        release_regex=re.compile(entry["release_regex"]) if "release_regex" in entry else DEFAULT_RELEASE_REGEX,
     )
 
 
@@ -93,7 +121,7 @@ def load_mapping(path: Path) -> Mapping:
     for number, entry in enumerate(mapping.get("software", []), 1):
         try:
             software.append(_software(entry))
-        except (KeyError, TypeError, AttributeError, re.error) as error:
+        except (KeyError, TypeError, AttributeError, ValueError, re.error) as error:
             raise ValueError(f"{path}: [[software]] entry {number}: {error!r}") from error
     images = mapping.get("images", {})
     if images and "query" not in images:
@@ -101,14 +129,19 @@ def load_mapping(path: Path) -> Mapping:
     return Mapping(tuple(software), images.get("query"), images.get("label", "image"))
 
 
+def cut(regex: re.Pattern[str], text: str) -> str | None:
+    """The version in text: regex's first group, or its whole match without groups. None if it doesn't match."""
+    match = regex.search(text)
+    if match is None:
+        return None
+    return match[1] if regex.groups else match[0]
+
+
 def _version(software: Software, labels: dict[str, str]) -> str | None:
     version = labels.get(software.version_label)
     if version is None or software.version_regex is None:
         return version
-    match = software.version_regex.search(version)
-    if match is None:
-        return None
-    return match[1] if software.version_regex.groups else match[0]
+    return cut(software.version_regex, version)
 
 
 def _image(reference: str) -> str:
@@ -127,7 +160,18 @@ def find(prometheus: PrometheusAPI, mapping: Mapping) -> Found:
             if version := _version(software, labels):
                 target = "/".join(labels.get(label, "") for label in software.target_labels)
                 namespace = labels.get("namespace", "")
-                installed.add(Installed(software.kind, target, namespace, software.product, software.package, version))
+                installed.add(
+                    Installed(
+                        software.kind,
+                        target,
+                        namespace,
+                        software.product,
+                        software.package,
+                        version,
+                        software.releases,
+                        software.release_regex,
+                    )
+                )
                 if image := labels.get(mapping.image_label):
                     covered.add(_image(image))
     unmapped = set()

@@ -28,6 +28,7 @@ package = "github.com/hashicorp/vault"
 version_label = "image"
 version_regex = ':v?([0-9][^@]*)'
 target_labels = ["namespace", "pod", "container"]
+releases = "registry:docker.io/hashicorp/vault"
 
 # A Helm release, from Flux: its pods' images are covered by this entry.
 [[software]]
@@ -37,6 +38,7 @@ package = "github.com/cert-manager/cert-manager"
 version_label = "chart_app_version"
 target_labels = ["exported_namespace", "name"]
 images = '^quay\.io/jetstack/cert-manager-'
+releases = "git:https://github.com/cert-manager/cert-manager.git"
 
 # A binary's own build info.
 [[software]]
@@ -55,6 +57,8 @@ product = "grafana"
 | `target_labels` | `["instance"]` | the labels naming an installation, joined with `/` into the findings' `target` |
 | `kind` | `software` | the findings' `target_kind` |
 | `images` | (none) | a regex of the images the entry covers when its series don't carry them (an `image` label) |
+| `releases` | (none) | where its releases are published, for [fixes](#fixes): `git:<repository URL>` (its tags) or `registry:<host>/<image>` (the image's tags) |
+| `release_regex` | `^v?(\d+(?:\.\d+)*)$` | a release's version in its tag, as `version_regex` reads it; tags it doesn't match aren't releases |
 
 An entry needs a product, a package, or both. A series' `namespace` label, if it has one, becomes the
 findings' `namespace`.
@@ -66,6 +70,20 @@ image not covered by an entry is served as `advisory_map_unmapped_image_info{ima
 An image is covered when an entry's series that gave a version carries it, or the entry's `images`
 regex matches it; images are compared without their digests. An image whose version an entry couldn't
 read (a `latest` tag its regex skips) is reported too.
+
+## Fixes
+
+A finding's `fixed_version` is the lowest release newer than the installed version that its records
+don't affect, so it's always one that's published and can be upgraded to. An advisory's bounds
+(`lessThan`, `lessThanOrEqual`, OSV's `fixed`) only say where the affected versions end, not that a
+release past them exists, so none is taken for a fix on its own. Without `releases`, or before a newer
+release is out, the finding is `open`. A CVE record that doesn't say where its affected versions end
+never names a fix.
+
+Releases are tags, as a dependency updater reads them: git's ref list for a repository (any git host;
+use the app's repository for a Helm release, not its chart's), or the registry API for an image,
+anonymously. The default `release_regex` keeps plain versions (`1.2.3`, `v1.2.3`), so prereleases and
+variant tags (`1.2.3-alpine`) aren't offered as fixes; set it to read a project's own scheme.
 
 ## Product and package names
 
