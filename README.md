@@ -69,6 +69,7 @@ report the running images it doesn't cover.
 | `MATCH_INTERVAL` | `15m` | how often versions are read and matched |
 | `FEED_REFRESH` | `24h` | how often the feeds are refreshed (conditional GETs, git fetches, changed records) |
 | `FEED_REFRESH_<FEED>` | `FEED_REFRESH` | per feed: `DEBIAN`, `CVELIST`, `OSV`, `KEV`, `CWE`, `RELEASES` |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
 
 ## Metrics
 
