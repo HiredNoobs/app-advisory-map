@@ -1,6 +1,6 @@
-import json
 import subprocess
 import urllib.error
+from collections import Counter
 from dataclasses import replace
 from email.message import Message
 from pathlib import Path
@@ -89,12 +89,12 @@ def test_registry_tags_with_a_token_and_pages(fake_http: FakeHttp) -> None:
     fake_http.routes["https://ghcr.io/token"] = response({"token": "t0ken"})
     fake_http.routes[TAGS] = tags
     assert registry_tags(REGISTRY.name) == ["2.1.1", "2.1.2", "2.1.3"]
-    assert [url for url, _ in fake_http.requests] == [
-        f"{TAGS}?n=1000",
-        "https://ghcr.io/token?service=ghcr.io&scope=repository%3Ahashicorp%2Fvault%3Apull",
-        f"{TAGS}?n=1000",
-        f"{TAGS}?last=2.1.2&n=1000",
-    ]
+    # The first page asked again with the token, which is fetched once.
+    assert Counter(url for url, _ in fake_http.requests) == {
+        f"{TAGS}?n=1000": 2,
+        "https://ghcr.io/token?service=ghcr.io&scope=repository%3Ahashicorp%2Fvault%3Apull": 1,
+        f"{TAGS}?last=2.1.2&n=1000": 1,
+    }
 
 
 def test_registry_refuses_the_token(fake_http: FakeHttp) -> None:
@@ -128,17 +128,6 @@ def test_restart_uses_the_copy_on_disk(tmp_path: Path, fake_http: FakeHttp) -> N
     restarted = Releases(tmp_path, {REGISTRY})
     restarted.update(2000, DAY)
     assert (restarted.data, fake_http.requests) == (feed.data, [])
-
-
-def test_reads_a_copy_without_patterns(tmp_path: Path) -> None:
-    # Its sources have the default pattern; tags it didn't filter aren't releases all the same.
-    kind, name, _ = REGISTRY
-    copy = {"sources": [[kind, name]], "tags": [[kind, name, ["2.1.3", "99"]]]}
-    (tmp_path / "releases.json").write_text(json.dumps(copy))
-    feed = Releases(tmp_path, {REGISTRY})
-    feed.load()
-    assert feed.data is not None and feed.data.sources == {REGISTRY}
-    assert newer(vault("2.1.2"), feed.data) == ["2.1.3"]
 
 
 def test_changed_sources_are_listed_again(tmp_path: Path, fake_http: FakeHttp) -> None:

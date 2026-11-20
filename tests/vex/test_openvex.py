@@ -200,7 +200,7 @@ def test_add_appends_and_versions(tmp_path: Path) -> None:
         later.isoformat(),
     )
     assert [item["status"] for item in written["statements"]] == ["under_investigation", "affected"]
-    assert not list(tmp_path.glob(".*"))
+    assert [path.name for path in tmp_path.iterdir()] == ["alice.json"]
 
 
 def test_add_rejects_an_invalid_statement(tmp_path: Path) -> None:

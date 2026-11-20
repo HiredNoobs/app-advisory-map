@@ -44,6 +44,7 @@ def server() -> Iterator[str]:
 
 def test_gzip_is_decompressed(server: str) -> None:
     response = http.get(f"{server}/feed")
+    assert response.headers["Content-Encoding"] == "gzip"
     assert (response.status, response.body, response.headers["ETag"]) == (200, BODY, '"v1"')
 
 

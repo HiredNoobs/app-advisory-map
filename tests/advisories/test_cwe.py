@@ -13,7 +13,9 @@ def test_names(tmp_path: Path, fake_http: FakeHttp) -> None:
         "CWE-79": "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
         "CWE-310": "Cryptographic Issues",
     }
-    assert (tmp_path / "cwe.xml.zip").read_bytes() == CWES
+    restarted = Cwe(tmp_path)
+    restarted.load()
+    assert restarted.data == feed.data
 
 
 def test_any_schema_version(tmp_path: Path, fake_http: FakeHttp) -> None:

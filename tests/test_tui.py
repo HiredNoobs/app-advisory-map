@@ -1,12 +1,11 @@
 import asyncio
-import html
 import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import FINDINGS, METRICS_URL, FakeHttp, serve
+from textual.widget import Widget
 from textual.widgets import DataTable, Input, Select, Static
 
 from advisory_map import cli
@@ -20,10 +19,9 @@ pytestmark = pytest.mark.usefixtures("vex_dir")
 SIZE = (120, 40)
 
 
-def screen(tui: Tui) -> str:
-    """The text on the screen."""
-    texts = re.findall(r">([^<]*)</text>", tui.export_screenshot())
-    return "\n".join(html.unescape(text).replace("\xa0", " ") for text in texts)
+def rendered(*widgets: Widget) -> str:
+    """The text the widgets draw."""
+    return "\n".join(widget.render_line(y).text for widget in widgets for y in range(widget.size.height))
 
 
 def assessments(tui: Tui) -> list[tuple[str, str]]:
@@ -65,20 +63,30 @@ def test_an_invalid_verdict_isnt_saved(fake_http: FakeHttp, vex_dir: Path) -> No
     async def scenario() -> None:
         tui = Tui(Store(vex_dir), METRICS_URL, "")
         async with tui.run_test(size=SIZE) as pilot:
-            await pilot.press("down", "a")
+            await pilot.press("a")
+            tui.screen.query_one("#status", Select).value = "fixed"
+            await pilot.click("#save")
+            await pilot.pause()
             assert isinstance(tui.screen, Assess)
+            assert "author" in str(tui.screen.query_one("#error", Static).content)
+            await pilot.press("escape")
+            assert not isinstance(tui.screen, Assess)
+
+    asyncio.run(scenario())
+    assert not vex_dir.exists()
+
+
+def test_a_verdict_on_every_installation_of_a_kind(fake_http: FakeHttp, vex_dir: Path) -> None:
+    serve(fake_http, vex_dir, *FINDINGS)
+
+    async def scenario() -> None:
+        tui = Tui(Store(vex_dir), METRICS_URL, "alice")
+        async with tui.run_test(size=SIZE) as pilot:
+            await pilot.press("down", "a")
             tui.screen.query_one("#scope", Select).value = product("debian-package")
             tui.screen.query_one("#status", Select).value = "fixed"
             await pilot.click("#save")
             await pilot.pause()
-            assert "author" in str(tui.screen.query_one("#error", Static).content)
-            tui.screen.query_one("#author", Input).value = "alice"
-            # A button ignores a press within 0.2s of the last.
-            await pilot.pause(0.3)
-            await pilot.click("#save")
-            await pilot.pause()
-            assert not isinstance(tui.screen, Assess)
-            await pilot.press("a", "escape")
             assert not isinstance(tui.screen, Assess)
 
     asyncio.run(scenario())
@@ -107,10 +115,11 @@ def test_labels_arent_markup(fake_http: FakeHttp, vex_dir: Path) -> None:
     async def scenario() -> None:
         tui = Tui(Store(vex_dir), METRICS_URL, "alice")
         async with tui.run_test(size=SIZE) as pilot:
-            assert "web/[b]app[/b]" in screen(tui)
+            assert "web/[b]app[/b]" in rendered(tui.query_one(DataTable))
             await pilot.press("a")
             await pilot.pause()
-            assert "This container: web/[b]app[/b]" in screen(tui)
+            scope = tui.screen.query_one("#scope", Select)
+            assert "This container: web/[b]app[/b]" in rendered(*scope.query(Static))
 
     asyncio.run(scenario())
 

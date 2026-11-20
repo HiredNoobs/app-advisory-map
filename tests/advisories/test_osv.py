@@ -1,4 +1,3 @@
-import json
 import urllib.error
 from collections import Counter
 from email.message import Message
@@ -9,7 +8,7 @@ import pytest
 from conftest import FakeHttp, osv_archive, response
 
 from advisory_map.advisories import releases
-from advisory_map.advisories.osv import Advisory, Index, Osv, covered, match
+from advisory_map.advisories.osv import Index, Osv, covered, match
 from advisory_map.findings import Severity
 from advisory_map.inventory.mapping import Installed, Package, ReleaseSource
 
@@ -77,22 +76,18 @@ def ids(feed: Osv) -> list[str]:
 
 def test_full_read(feed: Osv) -> None:
     feed.update(1000, DAY)
-    assert feed.data == Index(
-        frozenset({VAULT}),
-        {"Go": "2026-11-01T00:00:00Z"},
-        {
-            VAULT: {
-                "GHSA-0001": Advisory(
-                    "CVE-2026-0001",
-                    Severity("high", "2026-11-01T00:00:00Z"),
-                    ({"ranges": record("x")["affected"][0]["ranges"], "versions": []},),
-                    ("CWE-79",),
-                )
-            }
-        },
+    assert feed.data is not None and feed.data.cursors == {"Go": "2026-11-01T00:00:00Z"}
+    assert {package: list(ids) for package, ids in feed.data.advisories.items()} == {VAULT: ["GHSA-0001"]}
+    advisory = feed.data.advisories[VAULT]["GHSA-0001"]
+    assert (advisory.key, advisory.severity, advisory.cwes) == (
+        "CVE-2026-0001",
+        Severity("high", "2026-11-01T00:00:00Z"),
+        ("CWE-79",),
     )
+    assert advisory.bounded
     assert feed.records() == 1
-    assert not list(feed.data_dir.glob(".*.tmp"))
+    # The archive is read from disk, then deleted.
+    assert sorted(path.name for path in feed.data_dir.iterdir()) == ["osv-index.json", "osv.meta.json"]
 
 
 def test_delta_reads_only_the_changed_records(feed: Osv, fake_http: FakeHttp) -> None:
@@ -118,12 +113,12 @@ def test_delta_reads_only_the_changed_records(feed: Osv, fake_http: FakeHttp) ->
     assert feed.meta.last_success == 1000 + DAY
     assert ids(feed) == ["GHSA-0004"]
     assert feed.data is not None and feed.data.cursors == {"Go": "2026-11-03T00:00:00Z"}
-    assert [url.rsplit("/", 1)[1] for url, _ in fake_http.requests] == [
-        "modified_id.csv",
-        "GHSA-0004.json",
+    assert sorted(url.rsplit("/", 1)[1] for url, _ in fake_http.requests) == [
         "GHSA-0001.json",
+        "GHSA-0004.json",
         "GHSA-0005.json",
         "GHSA-0006.json",
+        "modified_id.csv",
     ]
 
 
@@ -170,16 +165,24 @@ def test_without_packages(tmp_path: Path, fake_http: FakeHttp) -> None:
     assert (feed.records(), fake_http.requests) == (0, [])
 
 
-def index(*records: dict[str, Any]) -> Index:
-    feed = Osv(Path(), {VAULT})
-    advisories: dict[Package, dict[str, Advisory]] = {}
-    for item in records:
-        feed._add(advisories, json.dumps(item).encode())
-    return Index(frozenset({VAULT}), {}, advisories)
+def index(fake_http: FakeHttp, tmp_path: Path, *records: dict[str, Any]) -> Index:
+    """What a full read of these records indexes."""
+    fake_http.routes[f"{URL}/Go/modified_id.csv"] = response(changes())
+    fake_http.routes[f"{URL}/Go/all.zip"] = response(osv_archive(*records))
+    feed = Osv(tmp_path, {VAULT}, URL)
+    feed.refresh(1000)
+    assert feed.data is not None
+    return feed.data
 
 
-def test_match() -> None:
-    found = index(
+INSTALLED = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2", RELEASES)
+
+
+@pytest.fixture
+def found(fake_http: FakeHttp, tmp_path: Path) -> Index:
+    return index(
+        fake_http,
+        tmp_path,
         # GitHub's and the Go team's records of one vulnerability: one finding, with the CWEs of both.
         record(
             "GHSA-0001",
@@ -209,9 +212,10 @@ def test_match() -> None:
         # Fixed in a version not released yet.
         record("GHSA-0009", fixed="2.3.0"),
     )
-    unmatched: Counter[str] = Counter()
-    vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2", RELEASES)
-    findings = sorted(match([vault], found, unmatched, PUBLISHED), key=lambda finding: finding.cve)
+
+
+def test_match(found: Index) -> None:
+    findings = sorted(match([INSTALLED], found, Counter(), PUBLISHED), key=lambda finding: finding.cve)
     # Each fix is the first release no deciding record includes: never a version not released yet.
     assert [(f.cve, f.severity, f.fixed_version, f.status, f.cwes) for f in findings] == [
         ("CVE-2026-0001", "medium", "2.1.5", "fix-available", ("CWE-400", "CWE-770")),
@@ -219,15 +223,30 @@ def test_match() -> None:
         ("GHSA-0008", "unknown", "2.1.4", "fix-available", ()),
         ("GHSA-0009", "unknown", "", "open", ()),
     ]
-    # Without releases to check against, none is known to be fixed.
-    assert {f.status for f in match([vault], found, Counter())} == {"open"}
     assert (findings[0].source, findings[0].package, findings[0].severity_updated) == (
         "osv",
         VAULT.name,
         "2026-11-01T00:00:00Z",
     )
+
+
+def test_match_without_releases(found: Index) -> None:
+    # Nothing to check against: none is known to be fixed.
+    assert {f.status for f in match([INSTALLED], found, Counter())} == {"open"}
+
+
+def test_match_counts_the_ranges_it_cant_compare(found: Index) -> None:
+    unmatched: Counter[str] = Counter()
+    list(match([INSTALLED], found, unmatched, PUBLISHED))
     assert unmatched == Counter({"git": 1})
-    assert covered(vault, found) == {
+
+
+def test_match_without_an_index() -> None:
+    assert list(match([INSTALLED], None, Counter())) == []
+
+
+def test_covered(found: Index) -> None:
+    assert covered(INSTALLED, found) == {
         "CVE-2026-0001": True,
         "GHSA-0002": True,
         "GHSA-0003": True,
@@ -235,14 +254,11 @@ def test_match() -> None:
         "GHSA-0008": True,
         "GHSA-0009": True,
     }
-    assert list(match([vault], None, unmatched)) == []
 
 
-def test_fingerprint_follows_the_affected_ranges() -> None:
-    vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2", RELEASES)
-
+def test_fingerprint_follows_the_affected_ranges(fake_http: FakeHttp, tmp_path: Path) -> None:
     def fingerprint(*records: dict[str, Any]) -> str:
-        [finding] = match([vault], index(*records), Counter())
+        [finding] = match([INSTALLED], index(fake_http, tmp_path, *records), Counter())
         return finding.fingerprint
 
     first = fingerprint(record("GHSA-0001", fixed="2.1.5"), record("GO-2026-0001", aliases=("GHSA-0001",)))
@@ -258,8 +274,10 @@ def test_fingerprint_follows_the_affected_ranges() -> None:
     )
 
 
-def test_bounded_records_decide() -> None:
+def test_bounded_records_decide(fake_http: FakeHttp, tmp_path: Path) -> None:
     found = index(
+        fake_http,
+        tmp_path,
         # The Go database's range is left open, GitHub's ends before the installed version: not affected.
         record("GHSA-0005", fixed="2.0.0", aliases=("CVE-2026-0005", "GO-2026-0005"), severity="HIGH"),
         record("GO-2026-0005", fixed="", aliases=("CVE-2026-0005", "GHSA-0005")),

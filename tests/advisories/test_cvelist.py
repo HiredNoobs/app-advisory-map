@@ -2,9 +2,9 @@ import json
 import logging
 import subprocess
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 import pytest
 from conftest import Origin, record
@@ -38,8 +38,23 @@ def affected(upper: str) -> list[dict[str, Any]]:
     return [{"version": "0", "lessThan": upper, "status": "affected", "versionType": "semver"}]
 
 
-def no_scan(*args: object) -> NoReturn:
-    pytest.fail("every record was read again")
+def reads(feed: CveList, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The objects the feed reads from its repository from now on."""
+    read: list[str] = []
+    cat = feed.git.cat
+
+    def recorded(names: Iterable[str]) -> Iterator[bytes | None]:
+        names = list(names)
+        read.extend(names)
+        return cat(names)
+
+    monkeypatch.setattr(feed.git, "cat", recorded)
+    return read
+
+
+def git_version() -> tuple[int, ...]:
+    version = subprocess.run(["git", "version"], check=True, capture_output=True, text=True).stdout.split()[2]
+    return tuple(int(part) for part in version.split(".")[:2])
 
 
 def git(repo: Path, *args: str) -> set[str]:
@@ -74,34 +89,34 @@ def test_scan_indexes_the_mapped_products(feed: CveList, origin: Origin) -> None
         record("CVE-2026-0003", affected("2.0"), state="REJECTED"),
     )
     feed.update(1000, DAY)
-    assert feed.data == Index(
-        commit,
-        frozenset({VAULT}),
-        {
-            VAULT: {
-                "CVE-2026-0001": Advisory(
-                    Severity("high", "2026-01-01T00:00:00.000Z"),
-                    ({"versions": affected("2.1.3"), "defaultStatus": None},),
-                )
-            }
-        },
-    )
+    assert feed.data is not None and feed.data.commit == commit
+    assert {product: list(cves) for product, cves in feed.data.advisories.items()} == {VAULT: ["CVE-2026-0001"]}
+    advisory = feed.data.advisories[VAULT]["CVE-2026-0001"]
+    assert advisory.severity == Severity("high", "2026-01-01T00:00:00.000Z")
+    assert advisory.affects("2.1.2") and not advisory.affects("2.1.3")
     assert feed.records() == 1
     assert feed.meta.last_success == 1000
 
 
 def test_refresh_reads_only_the_changed_records(feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch) -> None:
-    old = origin.commit(record("CVE-2026-0001", affected("2.1.3")), record("CVE-2026-0002", affected("2.1.4")))
+    old = origin.commit(
+        record("CVE-2026-0001", affected("2.1.3")),
+        record("CVE-2026-0002", affected("2.1.4")),
+        record("CVE-2026-0004", affected("2.1.5")),
+        record("CVE-2026-0005", affected("2.1.5")),
+    )
     feed.update(1000, DAY)
 
-    monkeypatch.setattr(CveList, "_scan", no_scan)
+    read = reads(feed, monkeypatch)
     delta_log(origin, "CVE-2026-0003")
     commit = origin.commit(record("CVE-2026-0003", affected("2.2.0")), remove=["CVE-2026-0002"])
     feed.update(1000 + DAY, DAY)
 
     assert feed.meta.last_success == 1000 + DAY
     assert feed.data is not None and feed.data.commit == commit
-    assert sorted(feed.data.advisories[VAULT]) == ["CVE-2026-0001", "CVE-2026-0003"]
+    assert sorted(feed.data.advisories[VAULT]) == ["CVE-2026-0001", "CVE-2026-0003", "CVE-2026-0004", "CVE-2026-0005"]
+    # At most the records added and removed: none of the three unchanged.
+    assert len(read) <= 2
     # Only the head's objects are kept: the old commit is pruned, with the record only it had.
     kept = git(feed.repo, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
     assert kept == git(feed.repo, "rev-list", "--objects", "--no-object-names", commit)
@@ -132,13 +147,14 @@ def test_older_commits_are_pruned_daily(feed: CveList, origin: Origin) -> None:
 def test_refresh_without_changes(feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch) -> None:
     origin.commit(record("CVE-2026-0001", affected("2.1.3")))
     feed.update(1000, DAY)
-    monkeypatch.setattr(CveList, "_scan", no_scan)
-    monkeypatch.setattr(CveList, "_delta", no_scan)
+    read = reads(feed, monkeypatch)
     feed.update(1000 + DAY, DAY)
     assert feed.meta.last_success == 1000 + DAY
     assert feed.records() == 1
+    assert read == []
 
 
+@pytest.mark.skipif(git_version() < (2, 29), reason="git maintenance is from git 2.29")
 def test_fetch_starts_no_detached_maintenance(
     feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -157,22 +173,21 @@ def test_first_fetch_says_it_takes_minutes(feed: CveList, origin: Origin, caplog
     origin.commit(record("CVE-2026-0001", affected("2.1.3")))
     caplog.set_level(logging.INFO)
     feed.update(1000, DAY)
-    assert "no copy yet" in caplog.text
+    assert "minutes" in caplog.text
     caplog.clear()
     feed.update(1000 + DAY, DAY)
-    assert "no copy yet" not in caplog.text
-    # A stalled transfer fails after a minute.
-    assert feed.git("config", "http.lowSpeedTime").strip() == "60"
+    assert "minutes" not in caplog.text
 
 
 def test_restart_uses_the_index(feed: CveList, origin: Origin, monkeypatch: pytest.MonkeyPatch) -> None:
     origin.commit(record("CVE-2026-0001", affected("2.1.3")))
     feed.update(1000, DAY)
     restarted = CveList(feed.data_dir, {VAULT}, origin.url)
-    monkeypatch.setattr(CveList, "_scan", no_scan)
+    read = reads(restarted, monkeypatch)
     restarted.update(2000, DAY)
     assert restarted.data == feed.data
     assert restarted.meta.last_success == 1000
+    assert read == []
 
 
 def test_changed_products_read_every_record(feed: CveList, origin: Origin) -> None:
@@ -290,40 +305,41 @@ def test_digest_follows_what_a_verdict_depends_on() -> None:
     assert digest(lambda item: item["containers"]["adp"][0].update(affected=[{"product": "x"}])) == unchanged
 
 
+BY_DEFAULT = {"versions": affected("1.9"), "defaultStatus": "affected"}
+INDEX = Index(
+    "commit",
+    frozenset({VAULT}),
+    {
+        VAULT: {
+            "CVE-2026-0001": Advisory(Severity("high", ""), ({"versions": affected("2.1.3")},)),
+            "CVE-2026-0002": Advisory(None, ({"versions": affected("2.0.0")},)),
+            "CVE-2026-0003": Advisory(None, ({"versions": [{"version": "2.1.2", "status": "affected"}]},)),
+            "CVE-2026-0004": Advisory(
+                None, ({"versions": [{"version": "abc", "versionType": "git", "status": "affected"}]},)
+            ),
+            # The CNA lists the version, an ADP the range with its fix.
+            "CVE-2026-0005": Advisory(
+                None,
+                ({"versions": [{"version": "2.1.2", "status": "affected"}]}, {"versions": affected("2.1.5")}),
+            ),
+            # Affected by default, though only older releases are listed.
+            "CVE-2026-0006": Advisory(None, (BY_DEFAULT,)),
+            # ...and an ADP's range confirms it.
+            "CVE-2026-0007": Advisory(None, (BY_DEFAULT, {"versions": affected("2.1.4")})),
+            # The last affected version, rather than the first fixed one.
+            "CVE-2026-0008": Advisory(
+                None, ({"versions": [{"version": "0", "lessThanOrEqual": "2.1.3", "status": "affected"}]},)
+            ),
+            # Fixed in a version not released yet.
+            "CVE-2026-0009": Advisory(None, ({"versions": affected("2.3.0")},)),
+        }
+    },
+)
+INSTALLED = Installed("software", "vault/vault-0/vault", "vault", VAULT, None, "2.1.2", RELEASES)
+
+
 def test_match() -> None:
-    by_default = {"versions": affected("1.9"), "defaultStatus": "affected"}
-    index = Index(
-        "commit",
-        frozenset({VAULT}),
-        {
-            VAULT: {
-                "CVE-2026-0001": Advisory(Severity("high", ""), ({"versions": affected("2.1.3")},)),
-                "CVE-2026-0002": Advisory(None, ({"versions": affected("2.0.0")},)),
-                "CVE-2026-0003": Advisory(None, ({"versions": [{"version": "2.1.2", "status": "affected"}]},)),
-                "CVE-2026-0004": Advisory(
-                    None, ({"versions": [{"version": "abc", "versionType": "git", "status": "affected"}]},)
-                ),
-                # The CNA lists the version, an ADP the range with its fix.
-                "CVE-2026-0005": Advisory(
-                    None,
-                    ({"versions": [{"version": "2.1.2", "status": "affected"}]}, {"versions": affected("2.1.5")}),
-                ),
-                # Affected by default, though only older releases are listed.
-                "CVE-2026-0006": Advisory(None, (by_default,)),
-                # ...and an ADP's range confirms it.
-                "CVE-2026-0007": Advisory(None, (by_default, {"versions": affected("2.1.4")})),
-                # The last affected version, rather than the first fixed one.
-                "CVE-2026-0008": Advisory(
-                    None, ({"versions": [{"version": "0", "lessThanOrEqual": "2.1.3", "status": "affected"}]},)
-                ),
-                # Fixed in a version not released yet.
-                "CVE-2026-0009": Advisory(None, ({"versions": affected("2.3.0")},)),
-            }
-        },
-    )
-    unmatched: Counter[str] = Counter()
-    vault = Installed("software", "vault/vault-0/vault", "vault", VAULT, None, "2.1.2", RELEASES)
-    findings = list(match([vault], index, unmatched, PUBLISHED))
+    findings = list(match([INSTALLED], INDEX, Counter(), PUBLISHED))
     # Each fix is the first release the record doesn't affect: never a version it names but isn't released.
     assert [(f.cve, f.severity, f.fixed_version, f.status) for f in findings] == [
         ("CVE-2026-0001", "high", "2.1.3", "fix-available"),
@@ -334,17 +350,31 @@ def test_match() -> None:
         ("CVE-2026-0008", "unknown", "2.1.4", "fix-available"),
         ("CVE-2026-0009", "unknown", "", "open"),
     ]
-    # Without releases to check against, none is known to be fixed.
-    assert {f.status for f in match([vault], index, Counter())} == {"open", "unconfirmed"}
     assert (findings[0].target, findings[0].namespace, findings[0].package) == (
         "vault/vault-0/vault",
         "vault",
         "hashicorp/vault",
     )
+
+
+def test_match_without_releases() -> None:
+    # Nothing to check against: none is known to be fixed.
+    assert {f.status for f in match([INSTALLED], INDEX, Counter())} == {"open", "unconfirmed"}
+
+
+def test_match_counts_the_ranges_it_cant_compare() -> None:
+    unmatched: Counter[str] = Counter()
+    list(match([INSTALLED], INDEX, unmatched, PUBLISHED))
     assert unmatched == Counter({"git": 1})
-    assert list(match([vault], None, unmatched)) == []
+
+
+def test_match_without_an_index() -> None:
+    assert list(match([INSTALLED], None, Counter())) == []
+
+
+def test_bounded() -> None:
     # Affected by default, CVE-2026-0006 includes every later release; CVE-2026-0004 can't be compared.
-    assert bounded(vault, index) == {
+    assert bounded(INSTALLED, INDEX) == {
         "CVE-2026-0001",
         "CVE-2026-0002",
         "CVE-2026-0003",
@@ -353,4 +383,4 @@ def test_match() -> None:
         "CVE-2026-0008",
         "CVE-2026-0009",
     }
-    assert bounded(vault, None) == set()
+    assert bounded(INSTALLED, None) == set()

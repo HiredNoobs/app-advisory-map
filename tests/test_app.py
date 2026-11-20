@@ -140,14 +140,9 @@ def test_run_once(app: App) -> None:
     ]
     assert ({"target_kind": "debian-package", "target": "host-2"}, 0.0) in metrics["advisory_map_inventory_packages"]
     assert ({"feed": "debian"}, 5.0) in metrics["advisory_map_feed_records"]
-    assert metrics["advisory_map_feed_last_success_timestamp_seconds"] == [
-        ({"feed": "debian"}, 1000),
-        ({"feed": "kev"}, 1000),
-        ({"feed": "cvelist"}, 1000),
-        ({"feed": "osv"}, 1000),
-        ({"feed": "cwe"}, 1000),
-        ({"feed": "releases"}, 1000),
-    ]
+    assert {labels["feed"]: value for labels, value in metrics["advisory_map_feed_last_success_timestamp_seconds"]} == {
+        feed.name: 1000 for feed in app.feeds
+    }
     assert metrics["advisory_map_match_last_success_timestamp_seconds"] == [({}, 1000)]
     assert metrics["advisory_map_vex_unmatched_statements"] == [({}, 0)]
     assert metrics["advisory_map_vex_invalid_documents"] == [({}, 0)]
@@ -212,7 +207,7 @@ def test_findings_stay_while_the_feeds_refresh(app: App, monkeypatch: pytest.Mon
     monkeypatch.setattr(Feed, "refresh", lambda feed, now: during.append(len(restarted.findings)))
     restarted.run_once(1000 + 2 * 86400)
     # Each feed was due: the findings from the copies on disk were there while it refreshed.
-    assert during == [2, 2, 2, 2, 2, 2]
+    assert during == [2] * len(restarted.feeds)
 
 
 def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:
@@ -282,7 +277,7 @@ def test_cve_records(env: dict[str, str], origin: Origin, fake_http: FakeHttp, t
     metrics = scrape(app)
     found = {labels["cve"]: labels for labels, _ in metrics["advisory_map_vulnerability_info"]}
     assert (found["CVE-2026-0001"]["severity"], found["CVE-2026-0001"]["severity_source"]) == ("critical", "cve.org")
-    assert found["CVE-2026-0100"] | {"kev": "false"} == {
+    assert found["CVE-2026-0100"] == {
         "cve": "CVE-2026-0100",
         "severity": "unknown",
         "severity_source": "cve.org",
