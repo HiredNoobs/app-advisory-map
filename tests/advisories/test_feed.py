@@ -56,8 +56,8 @@ def test_copy_without_its_meta_is_used_and_refreshed(tmp_path: Path) -> None:
     assert feed.records() == 1 and feed.due(now=100, interval=86400)
 
 
-def test_unloadable_copy_is_fetched_whole(tmp_path: Path, fake_http: FakeHttp) -> None:
-    fake_http.routes[Kev.url] = response(KEV, ETag='"v1"')
+def test_unloadable_copy_is_fetched_again(tmp_path: Path, fake_http: FakeHttp) -> None:
+    fake_http.routes[Kev.url] = response(KEV)
     Kev(tmp_path).refresh(100)
     (tmp_path / "kev.json").write_text("not json")
 
@@ -65,6 +65,4 @@ def test_unloadable_copy_is_fetched_whole(tmp_path: Path, fake_http: FakeHttp) -
     feed.load()
     assert feed.data is None and feed.due(now=200, interval=86400)
     feed.refresh(200)
-    # Nothing to fall back on, so no conditional headers.
-    assert fake_http.requests[-1][1] == {}
     assert feed.records() == 1

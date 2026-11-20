@@ -18,7 +18,7 @@ from typing import IO, Any, NamedTuple
 
 from advisory_map.advisories import ranges, releases
 from advisory_map.advisories.feed import Feed, write_atomic
-from advisory_map.findings import Finding, Severity, cwe_ids
+from advisory_map.findings import Finding, Severity, cwe_ids, digest
 from advisory_map.inventory.mapping import Installed, Product
 
 log = logging.getLogger(__name__)
@@ -145,10 +145,15 @@ class Details(NamedTuple):
 
     severity: Severity | None
     cwes: tuple[str, ...]
+    # Of what a verdict on it depends on: a verdict made before it changed expires.
+    digest: str
 
 
 def details(record: dict[str, Any]) -> Details:
-    """The record's severity, and the weaknesses its CNA and ADPs cite."""
+    """The record's severity, the weaknesses its CNA and ADPs cite, and a digest of what says how and
+    where it's exploited: its state, and its CNA's descriptions, affected products, configurations and
+    workarounds. Not what's added around those (scores, weaknesses, references, ADPs' enrichment)."""
+    cna = record.get("containers", {}).get("cna", {})
     return Details(
         severity(record),
         cwe_ids(
@@ -156,6 +161,12 @@ def details(record: dict[str, Any]) -> Details:
             for container in _containers(record)
             for problem in container.get("problemTypes", [])
             for description in problem.get("descriptions", [])
+        ),
+        digest(
+            [
+                record.get("cveMetadata", {}).get("state"),
+                *(cna.get(key) for key in ("descriptions", "affected", "configurations", "workarounds")),
+            ]
         ),
     )
 

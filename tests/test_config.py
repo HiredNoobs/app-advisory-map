@@ -24,6 +24,12 @@ def test_defaults() -> None:
     assert settings.refresh_interval("debian") == 86400
     assert settings.mapping_file is None
     assert settings.cvelist_url == "https://github.com/CVEProject/cvelistV5.git"
+    assert settings.vex_dir is None
+
+
+def test_vex_dir() -> None:
+    settings = Settings.from_env({"PROMETHEUS_URL": "http://prometheus:9090", "VEX_DIR": "/vex"})
+    assert settings.vex_dir == Path("/vex")
 
 
 def test_cvelist_mirror() -> None:

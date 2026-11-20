@@ -1,9 +1,11 @@
 """A CVE that applies to something running."""
 
+import hashlib
+import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 _CWE = re.compile(r"CWE-\d+")
 
@@ -36,10 +38,25 @@ class Finding:
     severity_updated: str = field(default="", metadata={"label": False})
     # The weaknesses (CWE IDs) it's an instance of: a metric of their own, not a label.
     cwes: tuple[str, ...] = field(default=(), metadata={"label": False})
+    # A digest of what its advisories say of how and where it's exploited: a verdict made before it
+    # changed expires. Empty where it isn't known.
+    fingerprint: str = field(default="", metadata={"label": False})
+
+    @classmethod
+    def from_labels(cls, labels: Mapping[str, str]) -> "Finding":
+        """A finding as /metrics serves it: its labels, without what isn't one."""
+        values: dict[str, Any] = {label: labels.get(label, "") for label in LABELS}
+        return cls(**values)
 
 
 # The fields served as labels.
 LABELS = tuple(item.name for item in fields(Finding) if item.metadata.get("label", True))
+
+
+def digest(value: object) -> str:
+    """A short digest of JSON-like data, the same however its keys are ordered."""
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 def cwe_ids(values: Iterable[object]) -> tuple[str, ...]:

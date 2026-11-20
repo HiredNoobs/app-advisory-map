@@ -26,6 +26,11 @@ A finding's severity is from the source updated most recently: a CVE record's CV
 ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency. Its weaknesses
 (CWEs) are those its CVE record's CNA and ADPs cite, else those of its OSV records.
 
+Whether a finding matters where it runs (a vulnerable feature that's turned off, say) is for you to
+judge: [verdicts](docs/vex.md) record it as OpenVEX statements in `VEX_DIR`, and each finding carries
+its assessment. `advisory-map vex`, run in the app's container, lists the findings and adds verdicts,
+on the command line or in a terminal UI.
+
 ## Requirements
 
 - **A Prometheus-compatible server** whose query API (`/api/v1/query`) the app can reach. It only
@@ -42,6 +47,7 @@ ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency
   name. Nothing about what's installed is sent: only the mapped names are looked up.
 - **A writable `DATA_DIR`**, 2 GB to be safe: the CVE List's clone (twice its size while it's
   repacked), the Debian tracker, and each mapped ecosystem's archive while it's first read.
+- **For verdicts:** a writable `VEX_DIR` that's backed up. Unlike `DATA_DIR` it can't be fetched again.
 
 ## Versions it reads
 
@@ -65,6 +71,7 @@ report the running images it doesn't cover.
 | `CVELIST_URL` | `https://github.com/CVEProject/cvelistV5.git` | where the CVE List is fetched from (a mirror) |
 | `OSV_URL` | `https://osv-vulnerabilities.storage.googleapis.com` | where OSV's exports are fetched from (a mirror) |
 | `DATA_DIR` | `/data` | the feeds' copies |
+| `VEX_DIR` | (none) | the [verdicts](docs/vex.md), OpenVEX documents |
 | `LISTEN_PORT` | `8080` | `/metrics` |
 | `MATCH_INTERVAL` | `15m` | how often versions are read and matched |
 | `FEED_REFRESH` | `24h` | how often the feeds are refreshed (conditional GETs, git fetches, changed records) |
@@ -73,13 +80,14 @@ report the running images it doesn't cover.
 
 ## Metrics
 
-- `advisory_map_vulnerability_info{cve, severity, severity_source, source, target_kind, target, namespace, package, installed_version, fixed_version, status, kev, kev_date_added, kev_ransomware}`: 1 per CVE that applies (an OSV advisory's own ID where it has no CVE), gone once it doesn't. `source` is `debian`, `cve.org` or `osv`; `status` is `fix-available`, or why there's no fix (`open`, `no-dsa`, `postponed`, `ignored`, `undetermined`), or `unconfirmed`: affected only by the record's default (see [versions](docs/mapping.md#versions)).
+- `advisory_map_vulnerability_info{cve, severity, severity_source, source, target_kind, target, namespace, package, installed_version, fixed_version, status, kev, kev_date_added, kev_ransomware, assessment, justification}`: 1 per CVE that applies (an OSV advisory's own ID where it has no CVE), gone once it doesn't. `source` is `debian`, `cve.org` or `osv`; `status` is `fix-available`, or why there's no fix (`open`, `no-dsa`, `postponed`, `ignored`, `undetermined`), or `unconfirmed`: affected only by the record's default (see [versions](docs/mapping.md#versions)). `assessment` is its [verdict](docs/vex.md)'s status (`not_affected`, `affected`, `fixed`, `under_investigation`), `expired` once the verdict no longer holds (its advisories changed, or it's been exploited since), or `unassessed`, with the verdict's `justification` if it gives one.
 - `advisory_map_vulnerability_cwe_info{cve, cwe, cwe_name}`: 1 per weakness (CWE) of a CVE in `advisory_map_vulnerability_info`, with its name in the catalogue (empty for an ID it doesn't have). Joined on `cve`, e.g. CVEs per weakness: `count by (cwe, cwe_name) (advisory_map_vulnerability_cwe_info and on (cve) advisory_map_vulnerability_info{target_kind="debian-package"})`.
 - `advisory_map_inventory_packages{target_kind, target}`: packages known per host (0: no `dpkg_package_info` for it), and mapped installations per target.
 - `advisory_map_unmapped_image_info{image}`: a running image no mapping entry covers, when the mapping has an `[images]` query.
 - `advisory_map_unmatched_records{source, reason}`: affected ranges that couldn't be compared with an installed version in the last match (`git` commits, `unspecified` or `unparsable` versions, OSV `ecosystem` ranges without a list of versions), so they're neither findings nor silently dropped.
 - `advisory_map_feed_last_success_timestamp_seconds{feed}`, `advisory_map_feed_last_attempt_timestamp_seconds{feed}`, `advisory_map_feed_records{feed}`.
 - `advisory_map_match_last_success_timestamp_seconds`.
+- `advisory_map_vex_unmatched_statements`: verdicts that apply to no finding, its vulnerability or installations gone (`advisory-map vex prune` archives them). `advisory_map_vex_invalid_documents`: documents in `VEX_DIR` left out, not valid OpenVEX (the reason is logged).
 
 ## Development
 
@@ -88,7 +96,9 @@ The package `advisory_map` (tests mirror it):
 - `inventory/`: what's installed, from Prometheus (`debian.py` hosts and packages, `mapping.py` everything else).
 - `advisories/`: a module per feed (`debian.py`, `cvelist.py`, `osv.py`, `kev.py`, `cwe.py`, `releases.py`), each with its matcher; `feed.py` is their base, `ranges.py` the version ranges they match.
 - `common/`: HTTP and streamed JSON.
+- `vex/`: the verdicts, `openvex.py` reading and writing their documents, `assess.py` which applies to each finding, `expiry.py` when it no longer holds.
 - `app.py` the match loop, `findings.py` its result, `metrics.py` `/metrics`, `config.py` the settings.
+- `cli.py` `advisory-map vex`, `tui.py` its terminal UI.
 
 ```sh
 python -m venv venv && . venv/bin/activate

@@ -1,3 +1,5 @@
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -15,6 +17,7 @@ from advisory_map.app import App
 from advisory_map.common import http
 from advisory_map.config import Settings
 from advisory_map.metrics import Collector
+from advisory_map.vex.openvex import Store, product
 
 PROMETHEUS_URL = "http://prometheus:9090"
 OSV_URL = "http://osv"
@@ -108,6 +111,8 @@ def test_run_once(app: App) -> None:
                 "kev": "true",
                 "kev_date_added": "2026-10-30",
                 "kev_ransomware": "true",
+                "assessment": "unassessed",
+                "justification": "",
             },
             1.0,
         ),
@@ -127,21 +132,53 @@ def test_run_once(app: App) -> None:
                 "kev": "false",
                 "kev_date_added": "",
                 "kev_ransomware": "",
+                "assessment": "unassessed",
+                "justification": "",
             },
             1.0,
         ),
     ]
     assert ({"target_kind": "debian-package", "target": "host-2"}, 0.0) in metrics["advisory_map_inventory_packages"]
     assert ({"feed": "debian"}, 5.0) in metrics["advisory_map_feed_records"]
-    assert metrics["advisory_map_feed_last_success_timestamp_seconds"] == [
-        ({"feed": "debian"}, 1000),
-        ({"feed": "kev"}, 1000),
-        ({"feed": "cvelist"}, 1000),
-        ({"feed": "osv"}, 1000),
-        ({"feed": "cwe"}, 1000),
-        ({"feed": "releases"}, 1000),
-    ]
+    assert {labels["feed"]: value for labels, value in metrics["advisory_map_feed_last_success_timestamp_seconds"]} == {
+        feed.name: 1000 for feed in app.feeds
+    }
     assert metrics["advisory_map_match_last_success_timestamp_seconds"] == [({}, 1000)]
+    assert metrics["advisory_map_vex_unmatched_statements"] == [({}, 0)]
+    assert metrics["advisory_map_vex_invalid_documents"] == [({}, 0)]
+
+
+def test_vex(env: dict[str, str], tmp_path: Path) -> None:
+    vex = tmp_path / "vex"
+    store = Store(vex)
+    store.add(
+        "alice",
+        "CVE-2026-0001",
+        product("debian-package", "host-1"),
+        "not_affected",
+        datetime(2026, 11, 20, tzinfo=UTC),
+        justification="vulnerable_code_not_in_execute_path",
+    )
+    store.add("alice", "CVE-2026-9999", product(), "fixed", datetime(2026, 11, 20, tzinfo=UTC))
+    (vex / "broken.json").write_text("{")
+    # Neither may fail the scrape: a statement's timestamp that isn't text, a directory.
+    numeric = json.loads(store.document("alice").read_text())
+    numeric["statements"][0]["timestamp"] = 5
+    (vex / "numeric.json").write_text(json.dumps(numeric))
+    (vex / "directory.json").mkdir()
+    app = App(Settings.from_env({**env, "VEX_DIR": str(vex)}))
+    app.run_once(1000)
+    metrics = scrape(app)
+    assessments = {
+        labels["cve"]: (labels["assessment"], labels["justification"])
+        for labels, _ in metrics["advisory_map_vulnerability_info"]
+    }
+    assert assessments == {
+        "CVE-2026-0001": ("not_affected", "vulnerable_code_not_in_execute_path"),
+        "CVE-2026-0002": ("unassessed", ""),
+    }
+    assert metrics["advisory_map_vex_unmatched_statements"] == [({}, 1)]
+    assert metrics["advisory_map_vex_invalid_documents"] == [({}, 3)]
 
 
 def test_feeds_refresh_only_when_due(app: App, fake_http: FakeHttp) -> None:
@@ -170,7 +207,7 @@ def test_findings_stay_while_the_feeds_refresh(app: App, monkeypatch: pytest.Mon
     monkeypatch.setattr(Feed, "refresh", lambda feed, now: during.append(len(restarted.findings)))
     restarted.run_once(1000 + 2 * 86400)
     # Each feed was due: the findings from the copies on disk were there while it refreshed.
-    assert during == [2, 2, 2, 2, 2, 2]
+    assert during == [2] * len(restarted.feeds)
 
 
 def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:
@@ -178,6 +215,49 @@ def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:
     prometheus.openssl = "3.5.4-1~deb13u2"
     app.run_once(1900)
     assert [labels["cve"] for labels, _ in scrape(app)["advisory_map_vulnerability_info"]] == ["CVE-2026-0002"]
+
+
+def test_verdicts_expire(env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path) -> None:
+    def cve_record(description: str) -> dict[str, Any]:
+        item = record("CVE-2026-0002", product="openssl")
+        item["containers"]["cna"]["descriptions"] = [{"lang": "en", "value": description}]
+        return item
+
+    origin.commit(cve_record("A crash."))
+    vex = tmp_path / "vex"
+    store = Store(vex)
+    # CVE-2026-0001 has been in KEV since 2026-10-30.
+    for cve, day in (
+        ("CVE-2026-0001", datetime(2026, 10, 1, tzinfo=UTC)),
+        ("CVE-2026-0002", datetime(2026, 11, 1, tzinfo=UTC)),
+    ):
+        store.add("alice", cve, product(), "not_affected", day, justification="component_not_present")
+    app = App(Settings.from_env({**env, "VEX_DIR": str(vex)}))
+
+    def assessments() -> dict[str, str]:
+        return {labels["cve"]: labels["assessment"] for labels, _ in scrape(app)["advisory_map_vulnerability_info"]}
+
+    app.run_once(1000)
+    assert assessments() == {"CVE-2026-0001": "expired", "CVE-2026-0002": "not_affected"}
+    origin.commit(cve_record("A crash when TLS is off."))
+    app.run_once(1000 + 86400)
+    assert assessments() == {"CVE-2026-0001": "expired", "CVE-2026-0002": "expired"}
+    # A verdict made again holds until the next change.
+    store.add(
+        "alice",
+        "CVE-2026-0002",
+        product(),
+        "not_affected",
+        datetime(2026, 11, 2, tzinfo=UTC),
+        justification="component_not_present",
+    )
+    app.run_once(1000 + 86400)
+    assert assessments()["CVE-2026-0002"] == "not_affected"
+    # The fingerprints outlast a restart.
+    origin.commit(cve_record("A crash when TLS is off, or on."))
+    app = App(Settings.from_env({**env, "VEX_DIR": str(vex)}))
+    app.run_once(1000 + 2 * 86400)
+    assert assessments()["CVE-2026-0002"] == "expired"
 
 
 def test_cve_records(env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path) -> None:
@@ -197,7 +277,7 @@ def test_cve_records(env: dict[str, str], origin: Origin, fake_http: FakeHttp, t
     metrics = scrape(app)
     found = {labels["cve"]: labels for labels, _ in metrics["advisory_map_vulnerability_info"]}
     assert (found["CVE-2026-0001"]["severity"], found["CVE-2026-0001"]["severity_source"]) == ("critical", "cve.org")
-    assert found["CVE-2026-0100"] | {"kev": "false"} == {
+    assert found["CVE-2026-0100"] == {
         "cve": "CVE-2026-0100",
         "severity": "unknown",
         "severity_source": "cve.org",
@@ -212,6 +292,8 @@ def test_cve_records(env: dict[str, str], origin: Origin, fake_http: FakeHttp, t
         "kev": "false",
         "kev_date_added": "",
         "kev_ransomware": "",
+        "assessment": "unassessed",
+        "justification": "",
     }
     assert ({"target_kind": "software", "target": "host-2"}, 1.0) in metrics["advisory_map_inventory_packages"]
     assert metrics["advisory_map_unmatched_records"] == [({"source": "cve.org", "reason": "git"}, 1.0)]

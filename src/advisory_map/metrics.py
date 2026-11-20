@@ -13,11 +13,13 @@ from prometheus_client.registry import Collector as _Collector
 
 from advisory_map.advisories.kev import Exploited
 from advisory_map.findings import LABELS
+from advisory_map.vex.assess import assess, assessment
+from advisory_map.vex.expiry import expired
 
 if TYPE_CHECKING:
     from advisory_map.app import App
 
-_FINDING_LABELS = [*LABELS, "kev", "kev_date_added", "kev_ransomware"]
+_FINDING_LABELS = [*LABELS, "kev", "kev_date_added", "kev_ransomware", "assessment", "justification"]
 
 
 def _kev_labels(exploited: Exploited | None) -> list[str]:
@@ -33,13 +35,19 @@ class Collector(_Collector):
     def collect(self) -> Iterator[Metric]:
         app = self.app
         kev = app.kev.data or {}
+        # Once: a match replaces them meanwhile. Verdicts are read at each scrape, so a new one shows
+        # without waiting for a match.
+        findings = app.findings
+        decided, unmatched_statements = assess(findings, app.vex.statements() if app.vex else [])
 
         vulnerabilities = GaugeMetricFamily(
             "advisory_map_vulnerability_info", "A CVE that applies to something running.", labels=_FINDING_LABELS
         )
-        for finding in app.findings:
+        seen = app.fingerprints.data if app.fingerprints else {}
+        for finding, statement in zip(findings, decided):
             labels = [getattr(finding, label) for label in LABELS]
-            vulnerabilities.add_metric([*labels, *_kev_labels(kev.get(finding.cve))], 1)
+            stale = statement is not None and expired(statement, finding, seen, kev)
+            vulnerabilities.add_metric([*labels, *_kev_labels(kev.get(finding.cve)), *assessment(statement, stale)], 1)
         yield vulnerabilities
 
         weaknesses = GaugeMetricFamily(
@@ -93,6 +101,17 @@ class Collector(_Collector):
                 attempt.add_metric([feed.name], feed.last_attempt)
             records.add_metric([feed.name], feed.records())
         yield from (success, attempt, records)
+
+        yield GaugeMetricFamily(
+            "advisory_map_vex_unmatched_statements",
+            "VEX statements that apply to no finding: the vulnerability is gone, or the installations.",
+            value=len(unmatched_statements),
+        )
+        yield GaugeMetricFamily(
+            "advisory_map_vex_invalid_documents",
+            "Documents in VEX_DIR left out: not valid OpenVEX (the reasons are logged).",
+            value=len(app.vex.invalid) if app.vex else 0,
+        )
 
         if app.last_match_success is not None:
             yield GaugeMetricFamily(

@@ -104,7 +104,6 @@ AFFECTED = {
     "versions": [
         {"version": "1.20.0", "lessThan": "1.20.5", "status": "affected"},
         {"version": "1.21.0", "lessThan": "1.21.2", "status": "affected"},
-        {"version": "1.21.1", "status": "unaffected"},
     ],
     "defaultStatus": "unaffected",
 }

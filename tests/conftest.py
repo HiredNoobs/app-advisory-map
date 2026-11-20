@@ -2,16 +2,23 @@ import io
 import json
 import subprocess
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from email.message import Message
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from prometheus_client import CollectorRegistry, generate_latest
 
 from advisory_map.advisories.cvelist import record_path
+from advisory_map.advisories.kev import Exploited
 from advisory_map.common import http
+from advisory_map.findings import Finding
+from advisory_map.metrics import Collector
+from advisory_map.vex.openvex import Store
 
 
 @pytest.fixture(autouse=True)
@@ -198,3 +205,56 @@ def fake_http(monkeypatch: pytest.MonkeyPatch) -> FakeHttp:
     monkeypatch.setattr(http, "get", fake.get)
     monkeypatch.setattr(http, "lines", fake.lines)
     return fake
+
+
+# The app's /metrics, as the CLI reads it inside its container.
+METRICS_URL = "http://127.0.0.1:8080/metrics"
+
+
+def serve(
+    fake_http: FakeHttp,
+    vex_dir: Path,
+    *findings: tuple[str, str, str, str],
+    kev: Mapping[str, Exploited] | None = None,
+    matched: float | None = 1000.0,
+) -> None:
+    """The app's /metrics with these findings, (cve, kind, target, package), matched at matched (None: not
+    yet), and assessed by its collector from the documents in vex_dir as they are at each request."""
+    app = SimpleNamespace(
+        findings=[
+            Finding(cve, "high", "osv", "osv", kind, target, "", package, "1.0.0", "", "open")
+            for cve, kind, target, package in findings
+        ],
+        kev=SimpleNamespace(data=kev or {}),
+        cwe=SimpleNamespace(data={}),
+        vex=Store(vex_dir),
+        fingerprints=None,
+        hosts=[],
+        software=[],
+        unmapped_images=[],
+        unmatched=Counter(),
+        feeds=(),
+        last_match_success=matched,
+    )
+
+    def page(url: str) -> http.Response:
+        registry = CollectorRegistry()
+        registry.register(Collector(app))  # type: ignore[arg-type]
+        return response(generate_latest(registry))
+
+    fake_http.routes[METRICS_URL] = page
+
+
+FINDINGS = (
+    ("CVE-2026-0001", "container", "web/frontend", "example.com/frontend"),
+    ("CVE-2026-0002", "debian-package", "host-1", "openssl"),
+)
+
+
+@pytest.fixture
+def vex_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The CLI's environment in the app's container: VEX_DIR set, the default port, no author."""
+    for name in ("LISTEN_PORT", "VEX_AUTHOR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("VEX_DIR", str(tmp_path / "vex"))
+    return tmp_path / "vex"
