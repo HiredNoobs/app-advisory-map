@@ -13,7 +13,7 @@ pytestmark = pytest.mark.usefixtures("vex_dir")
 
 
 def test_list(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    serve(fake_http, vex_dir, *FINDINGS)
+    serve(fake_http, vex_dir, (*FINDINGS[0], "high", "1.0.1"), FINDINGS[1])
     Store(vex_dir).add(
         "alice",
         "CVE-2026-0002",
@@ -24,7 +24,8 @@ def test_list(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[
     )
     assert cli.main(["list"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == ["ASSESSMENT", "CVE", "SEVERITY", "KIND", "TARGET", "PACKAGE", "VERSION"]
+    assert lines[0].split() == ["ASSESSMENT", "CVE", "SEVERITY", "KIND", "TARGET", "PACKAGE", "VERSION", "FIXED"]
+    assert lines[1].split()[-2:] == ["1.0.0", "1.0.1"]
     assert [line.split()[:2] for line in lines[1:]] == [
         ["unassessed", "CVE-2026-0001"],
         ["not_affected", "CVE-2026-0002"],

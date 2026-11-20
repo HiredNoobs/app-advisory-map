@@ -211,20 +211,24 @@ def fake_http(monkeypatch: pytest.MonkeyPatch) -> FakeHttp:
 METRICS_URL = "http://127.0.0.1:8080/metrics"
 
 
+def _finding(cve: str, kind: str, target: str, package: str, severity: str = "high", fixed: str = "") -> Finding:
+    return Finding(
+        cve, severity, "osv", "osv", kind, target, "", package, "1.0.0", fixed, "fix-available" if fixed else "open"
+    )
+
+
 def serve(
     fake_http: FakeHttp,
     vex_dir: Path,
-    *findings: tuple[str, str, str, str],
+    *findings: tuple[str, ...],
     kev: Mapping[str, Exploited] | None = None,
     matched: float | None = 1000.0,
 ) -> None:
-    """The app's /metrics with these findings, (cve, kind, target, package), matched at matched (None: not
-    yet), and assessed by its collector from the documents in vex_dir as they are at each request."""
+    """The app's /metrics with these findings, (cve, kind, target, package[, severity[, fixed version]]: high
+    and no fix without them), matched at matched (None: not yet), and assessed by its collector from the
+    documents in vex_dir as they are at each request."""
     app = SimpleNamespace(
-        findings=[
-            Finding(cve, "high", "osv", "osv", kind, target, "", package, "1.0.0", "", "open")
-            for cve, kind, target, package in findings
-        ],
+        findings=[_finding(*finding) for finding in findings],
         kev=SimpleNamespace(data=kev or {}),
         cwe=SimpleNamespace(data={}),
         vex=Store(vex_dir),

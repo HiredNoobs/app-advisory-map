@@ -10,7 +10,8 @@ from textual.widgets import DataTable, Input, Select, Static
 
 from advisory_map import cli
 from advisory_map.advisories.kev import Exploited
-from advisory_map.tui import Assess, Tui
+from advisory_map.findings import Finding
+from advisory_map.tui import Assess, Tui, advisory_url, complete
 from advisory_map.vex.openvex import Store, product
 
 pytestmark = pytest.mark.usefixtures("vex_dir")
@@ -76,6 +77,11 @@ def test_the_filter_says_what_it_does(fake_http: FakeHttp, vex_dir: Path) -> Non
             assert "Show unassessed" in offered()
 
     asyncio.run(scenario())
+
+
+def cves(tui: Tui) -> list[str]:
+    """The CVEs in the table, row by row."""
+    return [cve for _, cve in assessments(tui)]
 
 
 def cursor(tui: Tui) -> str:
@@ -237,6 +243,145 @@ def test_a_failed_reload_keeps_the_findings(fake_http: FakeHttp, vex_dir: Path) 
             await pilot.press("r")
             assert len(assessments(tui)) == 2 and cursor(tui) == "CVE-2026-0002"
             assert "connection refused" in str(tui.sub_title)
+
+    asyncio.run(scenario())
+
+
+def test_o_copies_the_advisorys_link(fake_http: FakeHttp, vex_dir: Path) -> None:
+    serve(fake_http, vex_dir, *FINDINGS)
+
+    async def scenario() -> None:
+        tui = Tui(Store(vex_dir), METRICS_URL, "alice")
+        async with tui.run_test(size=SIZE) as pilot:
+            await pilot.press("down", "o")
+            assert tui.clipboard == "https://www.cve.org/CVERecord?id=CVE-2026-0002"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "source, cve, url",
+    [
+        ("osv", "CVE-2026-0001", "https://www.cve.org/CVERecord?id=CVE-2026-0001"),
+        ("osv", "GHSA-abcd-efgh-ijkl", "https://osv.dev/vulnerability/GHSA-abcd-efgh-ijkl"),
+        ("debian", "TEMP-0000000-ABCDEF", "https://security-tracker.debian.org/tracker/TEMP-0000000-ABCDEF"),
+    ],
+)
+def test_advisory_url(source: str, cve: str, url: str) -> None:
+    finding = Finding(cve, "high", source, source, "container", "web/frontend", "web", "pkg", "1.0", "", "open")
+    assert advisory_url(finding) == url
+
+
+def test_filter(fake_http: FakeHttp, vex_dir: Path) -> None:
+    serve(fake_http, vex_dir, *FINDINGS, ("CVE-2026-0003", "container", "web/backend", "pkg", "critical"))
+
+    async def scenario() -> None:
+        tui = Tui(Store(vex_dir), METRICS_URL, "alice")
+        async with tui.run_test(size=SIZE) as pilot:
+            # Words match any column.
+            await pilot.press("slash", *"web/")
+            assert cves(tui) == ["CVE-2026-0003", "CVE-2026-0001"]
+            await pilot.press("space", *"critical")
+            assert cves(tui) == ["CVE-2026-0003"]
+            # Enter keeps it, back in the table.
+            await pilot.press("enter")
+            assert tui.focused is tui.query_one(DataTable) and cves(tui) == ["CVE-2026-0003"]
+            # Escape clears it.
+            await pilot.press("slash", "escape")
+            assert len(cves(tui)) == 3
+            # column:value matches that column only.
+            await pilot.press("slash", *"kind:debian", "enter")
+            assert cves(tui) == ["CVE-2026-0002"]
+            assert "1 of 3" in str(tui.sub_title)
+
+    asyncio.run(scenario())
+
+
+def test_the_filter_completes(fake_http: FakeHttp, vex_dir: Path) -> None:
+    serve(fake_http, vex_dir, *FINDINGS, ("CVE-2026-0003", "container", "web/backend", "pkg", "critical"))
+
+    async def scenario() -> None:
+        tui = Tui(Store(vex_dir), METRICS_URL, "alice")
+        async with tui.run_test(size=SIZE) as pilot:
+            terms = tui.query_one("#filter", Input)
+            # A column's name, then its values, the most severe first; Tab or the right arrow takes it.
+            await pilot.press("slash", *"sev")
+            await pilot.pause()
+            await pilot.press("tab")
+            assert terms.value == "severity:"
+            await pilot.pause()
+            await pilot.press("right")
+            assert terms.value == "severity:critical" and cves(tui) == ["CVE-2026-0003"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "terms, completed",
+    [
+        # As typed, then the rest.
+        ("Sev", "Severity:"),
+        # The most common first.
+        ("kind:container target:", "kind:container target:web/frontend"),
+        # Without a column, any column's values.
+        ("web/b", "web/backend"),
+        ("severity:high ", None),
+        ("nothing", None),
+    ],
+)
+def test_complete(terms: str, completed: str | None) -> None:
+    rows = [
+        ("unassessed", "CVE-1", "high", "container", "web/frontend", "a", "1.0"),
+        ("unassessed", "CVE-2", "high", "container", "web/frontend", "b", "1.0"),
+        ("unassessed", "CVE-3", "low", "container", "web/backend", "c", "1.0"),
+    ]
+    assert complete(terms, rows) == completed
+
+
+def test_sort(fake_http: FakeHttp, vex_dir: Path) -> None:
+    serve(
+        fake_http,
+        vex_dir,
+        ("CVE-1", "container", "a", "pkg", "low"),
+        ("CVE-2", "container", "b", "pkg", "critical"),
+        ("CVE-3", "container", "c", "pkg", "high"),
+    )
+
+    async def scenario() -> None:
+        tui = Tui(Store(vex_dir), METRICS_URL, "alice")
+        async with tui.run_test(size=SIZE) as pilot:
+            table = tui.query_one(DataTable)
+
+            def header() -> str:
+                return rendered(table).splitlines()[0]
+
+            def arrows() -> int:
+                return header().count("▲") + header().count("▼")
+
+            unsorted = header()
+            assert cves(tui) == ["CVE-1", "CVE-2", "CVE-3"] and arrows() == 0
+            # The footer has one entry for them all.
+            shown = [active.binding for active in tui.active_bindings.values() if active.binding.show]
+            assert [binding.key_display for binding in shown if binding.description == "Sort"] == ["1-8"]
+            # A header, or its number, sorts by its column: the most severe first; again, the other way;
+            # again, as it was. Its arrow says which, in room every header keeps for it.
+            severity = header().index("SEVERITY")
+            await pilot.click(DataTable, offset=(severity + 1, 0))
+            assert cves(tui) == ["CVE-2", "CVE-3", "CVE-1"] and "SEVERITY ▲" in header()
+            assert [header().index(name) for name in cli.COLUMNS] == [unsorted.index(name) for name in cli.COLUMNS]
+            await pilot.press("3")
+            assert cves(tui) == ["CVE-1", "CVE-3", "CVE-2"] and "SEVERITY ▼" in header()
+            await pilot.click(DataTable, offset=(severity + 1, 0))
+            assert cves(tui) == ["CVE-1", "CVE-2", "CVE-3"] and header() == unsorted
+            # Another column's takes over: only it has an arrow.
+            await pilot.press("3", "5")
+            assert cves(tui) == ["CVE-1", "CVE-2", "CVE-3"] and "TARGET ▲" in header() and arrows() == 1
+            await pilot.press("5")
+            assert cves(tui) == ["CVE-3", "CVE-2", "CVE-1"] and "TARGET ▼" in header()
+            # The cursor follows its finding however it's sorted.
+            assert cursor(tui) == "CVE-1"
+            await pilot.press("up", "up", "5")
+            assert cursor(tui) == "CVE-3" and cves(tui)[-1] == "CVE-3" and header() == unsorted
 
     asyncio.run(scenario())
 
