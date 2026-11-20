@@ -1,9 +1,9 @@
 """A CVE that applies to something running."""
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 _CWE = re.compile(r"CWE-\d+")
 
@@ -36,6 +36,12 @@ class Finding:
     severity_updated: str = field(default="", metadata={"label": False})
     # The weaknesses (CWE IDs) it's an instance of: a metric of their own, not a label.
     cwes: tuple[str, ...] = field(default=(), metadata={"label": False})
+
+    @classmethod
+    def from_labels(cls, labels: Mapping[str, str]) -> "Finding":
+        """A finding as /metrics serves it: its labels, without what isn't one."""
+        values: dict[str, Any] = {label: labels.get(label, "") for label in LABELS}
+        return cls(**values)
 
 
 # The fields served as labels.

@@ -21,6 +21,7 @@ from advisory_map.inventory.debian import DebianHost, debian_hosts
 from advisory_map.inventory.mapping import Installed, Mapping, find, load_mapping
 from advisory_map.inventory.prometheus import PrometheusAPI
 from advisory_map.metrics import Collector
+from advisory_map.vex.openvex import Store
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class App:
         self.feeds: tuple[Feed, ...] = (self.debian, self.kev, self.cvelist, self.osv, self.cwe, self.releases)
         if unknown := settings.feed_refresh_overrides.keys() - {feed.name for feed in self.feeds}:
             raise ValueError(f"FEED_REFRESH_ for unknown feeds: {', '.join(sorted(unknown))}")
+        self.vex = Store(settings.vex_dir) if settings.vex_dir else None
         self.hosts: list[DebianHost] = []
         self.software: list[Installed] = []
         self.unmapped_images: list[str] = []

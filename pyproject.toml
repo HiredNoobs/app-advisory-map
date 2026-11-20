@@ -8,6 +8,7 @@ readme = "README.md"
 dependencies = [
     "prometheus-client==0.26.0",
     "python-debian==1.1.1",
+    "textual==8.2.8",
 ]
 
 [project.optional-dependencies]

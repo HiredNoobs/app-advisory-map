@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from prometheus_client import CollectorRegistry, generate_latest
+from prometheus_client.core import GaugeMetricFamily
 
 from advisory_map.advisories.cvelist import record_path
 from advisory_map.common import http
@@ -198,3 +200,46 @@ def fake_http(monkeypatch: pytest.MonkeyPatch) -> FakeHttp:
     monkeypatch.setattr(http, "get", fake.get)
     monkeypatch.setattr(http, "lines", fake.lines)
     return fake
+
+
+# The app's /metrics, as the CLI reads it inside its container.
+METRICS_URL = "http://127.0.0.1:8080/metrics"
+
+
+class Served:
+    """The app's /metrics with these findings: (cve, kind, target, package)."""
+
+    def __init__(self, *findings: tuple[str, str, str, str]) -> None:
+        self.findings = findings
+
+    def collect(self) -> list[GaugeMetricFamily]:
+        family = GaugeMetricFamily(
+            "advisory_map_vulnerability_info",
+            "",
+            labels=["cve", "severity", "target_kind", "target", "package", "installed_version", "assessment"],
+        )
+        for cve, kind, target, package in self.findings:
+            # The server's assessment: the CLI and TUI ignore it, they decide from the documents.
+            family.add_metric([cve, "high", kind, target, package, "1.0.0", "fixed"], 1)
+        return [family]
+
+
+def serve(fake_http: FakeHttp, *findings: tuple[str, str, str, str]) -> None:
+    registry = CollectorRegistry()
+    registry.register(Served(*findings))
+    fake_http.routes[METRICS_URL] = response(generate_latest(registry))
+
+
+FINDINGS = (
+    ("CVE-2026-0001", "container", "web/frontend", "example.com/frontend"),
+    ("CVE-2026-0002", "debian-package", "host-1", "openssl"),
+)
+
+
+@pytest.fixture
+def vex_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The CLI's environment in the app's container: VEX_DIR set, the default port, no author."""
+    for name in ("LISTEN_PORT", "VEX_AUTHOR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("VEX_DIR", str(tmp_path / "vex"))
+    return tmp_path / "vex"

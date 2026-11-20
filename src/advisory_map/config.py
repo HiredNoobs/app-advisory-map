@@ -35,6 +35,8 @@ class Settings:
     cvelist_url: str
     osv_url: str
     data_dir: Path
+    # Verdicts on findings, as OpenVEX documents: see docs/vex.md.
+    vex_dir: Path | None
     listen_port: int
     match_interval: int
     feed_refresh: int
@@ -50,6 +52,7 @@ class Settings:
             cvelist_url=env.get("CVELIST_URL") or cvelist.URL,
             osv_url=env.get("OSV_URL") or osv.URL,
             data_dir=Path(env.get("DATA_DIR", "/data")),
+            vex_dir=Path(env["VEX_DIR"]) if env.get("VEX_DIR") else None,
             listen_port=int(env.get("LISTEN_PORT", "8080")),
             match_interval=parse_duration(env.get("MATCH_INTERVAL", "15m")),
             feed_refresh=parse_duration(env.get("FEED_REFRESH", "24h")),

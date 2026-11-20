@@ -1,3 +1,5 @@
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -15,6 +17,7 @@ from advisory_map.app import App
 from advisory_map.common import http
 from advisory_map.config import Settings
 from advisory_map.metrics import Collector
+from advisory_map.vex.openvex import Store, product
 
 PROMETHEUS_URL = "http://prometheus:9090"
 OSV_URL = "http://osv"
@@ -108,6 +111,8 @@ def test_run_once(app: App) -> None:
                 "kev": "true",
                 "kev_date_added": "2026-10-30",
                 "kev_ransomware": "true",
+                "assessment": "unassessed",
+                "justification": "",
             },
             1.0,
         ),
@@ -127,6 +132,8 @@ def test_run_once(app: App) -> None:
                 "kev": "false",
                 "kev_date_added": "",
                 "kev_ransomware": "",
+                "assessment": "unassessed",
+                "justification": "",
             },
             1.0,
         ),
@@ -142,6 +149,41 @@ def test_run_once(app: App) -> None:
         ({"feed": "releases"}, 1000),
     ]
     assert metrics["advisory_map_match_last_success_timestamp_seconds"] == [({}, 1000)]
+    assert metrics["advisory_map_vex_unmatched_statements"] == [({}, 0)]
+    assert metrics["advisory_map_vex_invalid_documents"] == [({}, 0)]
+
+
+def test_vex(env: dict[str, str], tmp_path: Path) -> None:
+    vex = tmp_path / "vex"
+    store = Store(vex)
+    store.add(
+        "alice",
+        "CVE-2026-0001",
+        product("debian-package", "host-1"),
+        "not_affected",
+        datetime(2026, 11, 20, tzinfo=UTC),
+        justification="vulnerable_code_not_in_execute_path",
+    )
+    store.add("alice", "CVE-2026-9999", product(), "fixed", datetime(2026, 11, 20, tzinfo=UTC))
+    (vex / "broken.json").write_text("{")
+    # Neither may fail the scrape: a statement's timestamp that isn't text, a directory.
+    numeric = json.loads(store.document("alice").read_text())
+    numeric["statements"][0]["timestamp"] = 5
+    (vex / "numeric.json").write_text(json.dumps(numeric))
+    (vex / "directory.json").mkdir()
+    app = App(Settings.from_env({**env, "VEX_DIR": str(vex)}))
+    app.run_once(1000)
+    metrics = scrape(app)
+    assessments = {
+        labels["cve"]: (labels["assessment"], labels["justification"])
+        for labels, _ in metrics["advisory_map_vulnerability_info"]
+    }
+    assert assessments == {
+        "CVE-2026-0001": ("not_affected", "vulnerable_code_not_in_execute_path"),
+        "CVE-2026-0002": ("unassessed", ""),
+    }
+    assert metrics["advisory_map_vex_unmatched_statements"] == [({}, 1)]
+    assert metrics["advisory_map_vex_invalid_documents"] == [({}, 3)]
 
 
 def test_feeds_refresh_only_when_due(app: App, fake_http: FakeHttp) -> None:
@@ -212,6 +254,8 @@ def test_cve_records(env: dict[str, str], origin: Origin, fake_http: FakeHttp, t
         "kev": "false",
         "kev_date_added": "",
         "kev_ransomware": "",
+        "assessment": "unassessed",
+        "justification": "",
     }
     assert ({"target_kind": "software", "target": "host-2"}, 1.0) in metrics["advisory_map_inventory_packages"]
     assert metrics["advisory_map_unmatched_records"] == [({"source": "cve.org", "reason": "git"}, 1.0)]
