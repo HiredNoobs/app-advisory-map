@@ -87,7 +87,7 @@ report the running images it doesn't cover.
 - `advisory_map_unmatched_records{source, reason}`: affected ranges that couldn't be compared with an installed version in the last match (`git` commits, `unspecified` or `unparsable` versions, OSV `ecosystem` ranges without a list of versions), so they're neither findings nor silently dropped.
 - `advisory_map_feed_last_success_timestamp_seconds{feed}`, `advisory_map_feed_last_attempt_timestamp_seconds{feed}`, `advisory_map_feed_records{feed}`.
 - `advisory_map_match_last_success_timestamp_seconds`.
-- `advisory_map_vex_unmatched_statements`: verdicts that apply to no finding, its vulnerability or installations gone. `advisory_map_vex_invalid_documents`: documents in `VEX_DIR` left out, not valid OpenVEX (the reason is logged).
+- `advisory_map_vex_unmatched_statements`: verdicts that apply to no finding, its vulnerability or installations gone (`advisory-map vex prune` archives them). `advisory_map_vex_invalid_documents`: documents in `VEX_DIR` left out, not valid OpenVEX (the reason is logged).
 
 ## Development
 

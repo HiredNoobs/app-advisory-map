@@ -39,6 +39,8 @@ port to secure.
   finding's `target`, with its `--kind`). `not_affected` needs a `--justification` or an `--impact`
   (why, in words), `affected` an `--action` (what to do about it). It says how many findings the
   verdict applies to.
+- `prune`: the statements that apply to no finding ([unmatched](#unmatched-statements)); `--apply`
+  moves them to the archive.
 - `tui`: the findings in a table (`u` shows only those without a verdict that holds, `r` reads them
   again), and a form for a verdict on the selected one (`a` or Enter).
 
@@ -62,8 +64,9 @@ A `not_affected` justification is one of `component_not_present`, `vulnerable_co
 
 Each author has a document, `<author>.json` (the author's name lowercased, characters other than
 letters, digits, `.`, `_` and `-` replaced by `-`). `add` appends a statement to it, with when it was
-made, and increments its version; statements are never changed or removed. Of the statements about a
-finding, the latest decides, so a document is also its verdicts' history.
+made, and increments its version; statements are never changed, and only `prune` removes them (to the
+archive). Of the statements about a finding, the latest decides, so a document is also its verdicts'
+history.
 
 Other documents in `VEX_DIR` (any `*.json` whose name doesn't start with a dot) are read too, but never
 written: they can come from elsewhere, such as [vexctl](https://github.com/openvex/vexctl). A document
@@ -81,8 +84,19 @@ Kinds and targets are percent-encoded, except a target's `/`. A statement applie
 vulnerability's name or one of its aliases is the finding's `cve`, and one of its products covers the
 finding's installation. Statements about other products (purls) are read, but apply to nothing.
 
+## Unmatched statements
+
 Statements that apply to no finding, their vulnerability fixed or their installations gone, are
-counted in `advisory_map_vex_unmatched_statements`.
+counted in `advisory_map_vex_unmatched_statements`. `prune` lists those in authors' documents, and with
+`--apply` moves them to the author's document in `VEX_DIR/archive`: valid OpenVEX, each statement with
+when it was made, and not read, so they're kept as history but no longer count. To restore one, move it
+back. Documents from elsewhere are never written, so their unmatched statements (and those about purls)
+still count.
+
+A finding missing for a while also leaves its statements unmatched: a host Prometheus doesn't scrape
+for a time, or a feed whose copy hasn't loaded. `prune` says how many findings there are and when the
+app matched them; check that they're all there before `--apply`. It refuses before the app's first
+match.
 
 ## Expiry
 
@@ -100,4 +114,4 @@ A new verdict on the finding, the same as before or not, holds until the next ch
 `.fingerprints.json` only loses the comparison: verdicts start again from what the advisories say
 when the app next matches.
 
-`VEX_DIR` isn't a cache: back it up, and keep it apart from `DATA_DIR`, which can be thrown away.
+`VEX_DIR`, its archive included, isn't a cache: back it up, and keep it apart from `DATA_DIR`, which can be thrown away.

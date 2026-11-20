@@ -216,9 +216,10 @@ def serve(
     vex_dir: Path,
     *findings: tuple[str, str, str, str],
     kev: Mapping[str, Exploited] | None = None,
+    matched: float | None = 1000.0,
 ) -> None:
-    """The app's /metrics with these findings, (cve, kind, target, package), assessed by its collector from
-    the documents in vex_dir as they are at each request."""
+    """The app's /metrics with these findings, (cve, kind, target, package), matched at matched (None: not
+    yet), and assessed by its collector from the documents in vex_dir as they are at each request."""
     app = SimpleNamespace(
         findings=[
             Finding(cve, "high", "osv", "osv", kind, target, "", package, "1.0.0", "", "open")
@@ -233,7 +234,7 @@ def serve(
         unmapped_images=[],
         unmatched=Counter(),
         feeds=(),
-        last_match_success=None,
+        last_match_success=matched,
     )
 
     def page(url: str) -> http.Response:

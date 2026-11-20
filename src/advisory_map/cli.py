@@ -1,6 +1,7 @@
 """advisory-map vex: verdicts on the findings, run in the app's container (kubectl or docker exec). The
 findings and their assessments come from the app's /metrics, which reads the OpenVEX documents in
-VEX_DIR again whenever one changes; verdicts are added to them."""
+VEX_DIR again whenever one changes; verdicts are added to them, and those that apply to no finding
+archived."""
 
 import argparse
 import os
@@ -14,7 +15,7 @@ from prometheus_client.parser import text_string_to_metric_families
 from advisory_map.common import http
 from advisory_map.findings import Finding
 from advisory_map.vex.assess import assess
-from advisory_map.vex.openvex import JUSTIFICATIONS, STATUSES, Store, product
+from advisory_map.vex.openvex import ARCHIVE, JUSTIFICATIONS, STATUSES, Store, product
 
 COLUMNS = ("ASSESSMENT", "CVE", "SEVERITY", "KIND", "TARGET", "PACKAGE", "VERSION")
 # Assessments with no verdict that holds.
@@ -30,16 +31,23 @@ def metrics_url() -> str:
     return f"http://127.0.0.1:{os.environ.get('LISTEN_PORT', '8080')}/metrics"
 
 
+def served(url: str) -> tuple[list[tuple[Finding, str]], float | None]:
+    """The findings the app serves with their assessments, by kind, target and CVE, and when it matched
+    them (None: not yet)."""
+    found: list[tuple[Finding, str]] = []
+    matched = None
+    for family in text_string_to_metric_families(http.get(url).body.decode()):
+        if family.name == "advisory_map_vulnerability_info":
+            found.extend(
+                (Finding.from_labels(sample.labels), sample.labels.get("assessment", "")) for sample in family.samples
+            )
+        elif family.name == "advisory_map_match_last_success_timestamp_seconds":
+            matched = family.samples[0].value
+    return sorted(found, key=lambda pair: (pair[0].target_kind, pair[0].target, pair[0].cve)), matched
+
+
 def findings(url: str) -> list[tuple[Finding, str]]:
-    """The findings the app serves with their assessments, by kind, target and CVE."""
-    families = text_string_to_metric_families(http.get(url).body.decode())
-    found = [
-        (Finding.from_labels(sample.labels), sample.labels.get("assessment", ""))
-        for family in families
-        if family.name == "advisory_map_vulnerability_info"
-        for sample in family.samples
-    ]
-    return sorted(found, key=lambda pair: (pair[0].target_kind, pair[0].target, pair[0].cve))
+    return served(url)[0]
 
 
 def store(args: argparse.Namespace) -> Store:
@@ -106,6 +114,29 @@ def add(args: argparse.Namespace) -> None:
     )
 
 
+def prune(args: argparse.Namespace) -> None:
+    found, matched = served(args.url)
+    if matched is None:
+        raise ValueError("the app hasn't matched the findings yet: every statement would look unmatched")
+    vex = store(args)
+    _, unmatched = assess([item for item, _ in found], vex.statements())
+    statements = vex.archive(unmatched, now()) if args.apply else vex.archivable(unmatched)
+    rows = [
+        (
+            statement.author,
+            statement.vulnerability,
+            statement.status,
+            " ".join(statement.products),
+            str(statement.timestamp.date()),
+        )
+        for statement in statements
+    ]
+    print(_table([("AUTHOR", "CVE", "STATUS", "PRODUCTS", "MADE"), *rows]))
+    when = datetime.fromtimestamp(matched, UTC).isoformat(timespec="seconds")
+    done = f"moved to {vex.path / ARCHIVE}" if args.apply else "--apply moves them to the archive"
+    print(f"These apply to none of the {len(found)} findings the app matched at {when}: {done}.")
+
+
 def tui(args: argparse.Namespace) -> None:
     # Only here: the rest of the CLI, and the app, run without loading Textual.
     from advisory_map.tui import Tui
@@ -134,6 +165,10 @@ def parser() -> argparse.ArgumentParser:
     adding.add_argument("--action", help="what to do about it, when it's affected")
     adding.add_argument("--author", help="who's saying so (default: VEX_AUTHOR)")
     adding.set_defaults(run=add)
+
+    pruning = commands.add_parser("prune", help="the statements that apply to no finding, to move to the archive")
+    pruning.add_argument("--apply", action="store_true", help="move them (without it, only list them)")
+    pruning.set_defaults(run=prune)
 
     terminal = commands.add_parser("tui", help="the findings and a form for verdicts, in the terminal")
     terminal.add_argument("--author", help="the verdicts' author (default: VEX_AUTHOR)")

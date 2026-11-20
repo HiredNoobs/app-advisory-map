@@ -1,12 +1,14 @@
 """Verdicts on findings, as the OpenVEX documents (https://github.com/openvex/spec, v0.2.0) in VEX_DIR. A
 statement's products are installations, as IRIs of advisory-map's own: every installation, a kind's, or
 a target's. Statements are never edited: a later one about the same vulnerability and installation takes
-over, so a document is also its verdicts' history."""
+over, so a document is also its verdicts' history. Those that apply to nothing any more are moved to an
+archive of the same documents, which isn't read."""
 
 import json
 import logging
 import re
 import uuid
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +21,8 @@ log = logging.getLogger(__name__)
 
 CONTEXT = "https://openvex.dev/ns/v0.2.0"
 PRODUCT = "advisory-map:installation"
+# The directory in VEX_DIR where Store.archive moves statements: its documents aren't read.
+ARCHIVE = "archive"
 STATUSES = ("not_affected", "affected", "fixed", "under_investigation")
 JUSTIFICATIONS = (
     "component_not_present",
@@ -222,26 +226,85 @@ class Store:
         item = {key: value for key, value in item.items() if value}
         statement = _statement(item, author, now)
         path = self.document(author)
-        if path.exists():
-            content, _ = _document(path.read_bytes())
-            if content["author"] != author:
-                raise ValueError(f"{path.name} is {content['author']!r}'s document")
-            content["version"] += 1
-            content["last_updated"] = now.isoformat()
-        else:
-            content = {
-                "@context": CONTEXT,
-                "@id": f"urn:uuid:{uuid.uuid4()}",
-                "author": author,
-                "timestamp": now.isoformat(),
-                "version": 1,
-                "statements": [],
-            }
+        content = _opened(path, author, now)
         content["statements"].append(item)
-        self.path.mkdir(parents=True, exist_ok=True)
-        write_atomic(path, (json.dumps(content, indent=2) + "\n").encode())
+        _write(path, content)
         return statement
 
     def document(self, author: str) -> Path:
         """The author's document, where add writes their statements."""
         return self.path / _file_name(author)
+
+    def _own(self) -> Iterator[tuple[Path, dict[str, Any], list[Statement]]]:
+        """Each author's own document (named for its author: the one add writes), with its statements.
+        Those that aren't valid are left out, as they are when read."""
+        for path in self._files():
+            try:
+                content, statements = _document(path.read_bytes())
+                own = path.name == _file_name(content["author"])
+            except ValueError, OSError:
+                continue
+            if own:
+                yield path, content, statements
+
+    def archivable(self, statements: Iterable[Statement]) -> list[Statement]:
+        """Those of these statements that archive would move: the ones in authors' own documents."""
+        wanted = set(statements)
+        return [statement for _, _, own in self._own() for statement in own if statement in wanted]
+
+    def archive(self, statements: Iterable[Statement], now: datetime) -> list[Statement]:
+        """Those of these statements in authors' own documents, moved to the authors' documents in the
+        archive (VEX_DIR/archive, which isn't read), each with its timestamp. Each archive is written
+        before the document its statements leave: after a crash between the two, a statement in both is
+        archived once when it's moved again."""
+        wanted = set(statements)
+        # Every document and archive read first: one that isn't valid stops the move before any write.
+        moving = [
+            (path, content, own, _opened(self.path / ARCHIVE / path.name, content["author"], now))
+            for path, content, own in self._own()
+            if wanted.intersection(own)
+        ]
+        moved = []
+        for path, content, own, archived in moving:
+            kept = []
+            for item, statement in zip(content["statements"], own):
+                if statement not in wanted:
+                    kept.append(item)
+                    continue
+                item = {"timestamp": statement.timestamp.isoformat()} | item
+                if item not in archived["statements"]:
+                    archived["statements"].append(item)
+                moved.append(statement)
+            _write(self.path / ARCHIVE / path.name, archived)
+            content["statements"] = kept
+            _write(path, _changed(content, now))
+        return moved
+
+
+def _opened(path: Path, author: str, now: datetime) -> dict[str, Any]:
+    """The author's document at path, to be changed, or a new one."""
+    if not path.exists():
+        return {
+            "@context": CONTEXT,
+            "@id": f"urn:uuid:{uuid.uuid4()}",
+            "author": author,
+            "timestamp": now.isoformat(),
+            "version": 1,
+            "statements": [],
+        }
+    content, _ = _document(path.read_bytes())
+    if content["author"] != author:
+        raise ValueError(f"{path.name} is {content['author']!r}'s document")
+    return _changed(content, now)
+
+
+def _changed(content: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """The document with its next version."""
+    content["version"] += 1
+    content["last_updated"] = now.isoformat()
+    return content
+
+
+def _write(path: Path, content: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(path, (json.dumps(content, indent=2) + "\n").encode())

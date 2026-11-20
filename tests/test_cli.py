@@ -143,3 +143,72 @@ def test_main_runs_the_cli_for_vex(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit) as exit_:
         __main__.main(["vex", "list"])
     assert (exit_.value.code, calls) == (3, [["list"]])
+
+
+def test_prune(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    serve(fake_http, vex_dir, *FINDINGS)
+    store = Store(vex_dir)
+    made = datetime(2026, 11, 1, tzinfo=UTC)
+    store.add("alice", "CVE-2026-0001", product("container", "web/frontend"), "fixed", made)
+    # Fixed since, and on a host that's gone.
+    store.add("alice", "CVE-2026-0009", product(), "fixed", made.replace(day=2))
+    store.add("alice", "CVE-2026-0002", product("debian-package", "host-9"), "fixed", made.replace(day=3))
+    # One without a timestamp of its own has its document's.
+    document = json.loads((vex_dir / "alice.json").read_text())
+    del document["statements"][1]["timestamp"]
+    (vex_dir / "alice.json").write_text(json.dumps(document))
+    # A document from elsewhere is never written.
+    imported = {
+        **document,
+        "author": "vendor",
+        "statements": [{**document["statements"][2], "timestamp": "2026-11-04"}],
+    }
+    (vex_dir / "imported.json").write_text(json.dumps(imported))
+    before = {path.name: path.read_text() for path in vex_dir.iterdir()}
+
+    assert cli.main(["prune"]) == 0
+    out = capsys.readouterr().out
+    assert [line.split()[1] for line in out.splitlines()[1:3]] == ["CVE-2026-0009", "CVE-2026-0002"]
+    assert "--apply" in out
+    assert {path.name: path.read_text() for path in vex_dir.iterdir()} == before
+
+    assert cli.main(["prune", "--apply"]) == 0
+    assert "moved to" in capsys.readouterr().out
+    assert [s.vulnerability for s in Store(vex_dir).statements()] == ["CVE-2026-0001", "CVE-2026-0002"]
+    assert (vex_dir / "imported.json").read_text() == before["imported.json"]
+    assert json.loads((vex_dir / "alice.json").read_text())["version"] == 4
+    archived = Store(vex_dir / "archive").statements()
+    assert [(s.vulnerability, s.timestamp) for s in archived] == [
+        ("CVE-2026-0009", made),
+        ("CVE-2026-0002", made.replace(day=3)),
+    ]
+
+    # Interrupted after the archive was written: moved again, they're archived once.
+    (vex_dir / "alice.json").write_text(before["alice.json"])
+    assert cli.main(["prune", "--apply"]) == 0
+    assert len(Store(vex_dir / "archive").statements()) == 2
+    assert [s.vulnerability for s in Store(vex_dir).statements()] == ["CVE-2026-0001", "CVE-2026-0002"]
+
+
+@pytest.mark.parametrize(
+    "matched, page, message",
+    [(None, None, "hasn't matched"), (1000.0, OSError("connection refused"), "connection refused")],
+)
+def test_prune_needs_the_apps_findings(
+    fake_http: FakeHttp,
+    vex_dir: Path,
+    capsys: pytest.CaptureFixture[str],
+    matched: float | None,
+    page: OSError | None,
+    message: str,
+) -> None:
+    # Before the app has matched, or without it, every statement would look unmatched.
+    serve(fake_http, vex_dir, *FINDINGS, matched=matched)
+    if page:
+        fake_http.routes[METRICS_URL] = page
+    Store(vex_dir).add("alice", "CVE-2026-0009", product(), "fixed", cli.now())
+    before = (vex_dir / "alice.json").read_text()
+    assert cli.main(["prune", "--apply"]) == 1
+    assert message in capsys.readouterr().err
+    assert (vex_dir / "alice.json").read_text() == before
+    assert not (vex_dir / "archive").exists()
