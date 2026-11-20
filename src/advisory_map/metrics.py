@@ -14,6 +14,7 @@ from prometheus_client.registry import Collector as _Collector
 from advisory_map.advisories.kev import Exploited
 from advisory_map.findings import LABELS
 from advisory_map.vex.assess import assess, assessment
+from advisory_map.vex.expiry import expired
 
 if TYPE_CHECKING:
     from advisory_map.app import App
@@ -42,9 +43,11 @@ class Collector(_Collector):
         vulnerabilities = GaugeMetricFamily(
             "advisory_map_vulnerability_info", "A CVE that applies to something running.", labels=_FINDING_LABELS
         )
+        seen = app.fingerprints.data if app.fingerprints else {}
         for finding, statement in zip(findings, decided):
             labels = [getattr(finding, label) for label in LABELS]
-            vulnerabilities.add_metric([*labels, *_kev_labels(kev.get(finding.cve)), *assessment(statement)], 1)
+            stale = statement is not None and expired(statement, finding, seen, kev)
+            vulnerabilities.add_metric([*labels, *_kev_labels(kev.get(finding.cve)), *assessment(statement, stale)], 1)
         yield vulnerabilities
 
         weaknesses = GaugeMetricFamily(

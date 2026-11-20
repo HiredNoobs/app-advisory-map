@@ -2,6 +2,7 @@ import asyncio
 import html
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from conftest import FINDINGS, METRICS_URL, FakeHttp, serve
 from textual.widgets import DataTable, Input, Select, Static
 
 from advisory_map import cli
+from advisory_map.advisories.kev import Exploited
 from advisory_map.tui import Assess, Tui
 from advisory_map.vex.openvex import Store, product
 
@@ -30,7 +32,7 @@ def assessments(tui: Tui) -> list[tuple[str, str]]:
 
 
 def test_assess_a_finding(fake_http: FakeHttp, vex_dir: Path) -> None:
-    serve(fake_http, *FINDINGS)
+    serve(fake_http, vex_dir, *FINDINGS)
 
     async def scenario() -> None:
         tui = Tui(Store(vex_dir), METRICS_URL, "alice")
@@ -58,7 +60,7 @@ def test_assess_a_finding(fake_http: FakeHttp, vex_dir: Path) -> None:
 
 
 def test_an_invalid_verdict_isnt_saved(fake_http: FakeHttp, vex_dir: Path) -> None:
-    serve(fake_http, *FINDINGS)
+    serve(fake_http, vex_dir, *FINDINGS)
 
     async def scenario() -> None:
         tui = Tui(Store(vex_dir), METRICS_URL, "")
@@ -84,8 +86,23 @@ def test_an_invalid_verdict_isnt_saved(fake_http: FakeHttp, vex_dir: Path) -> No
     assert statement["products"] == [{"@id": "advisory-map:installation/debian-package"}]
 
 
+def test_expired_verdicts_need_assessing(fake_http: FakeHttp, vex_dir: Path) -> None:
+    serve(fake_http, vex_dir, *FINDINGS, kev={"CVE-2026-0002": Exploited("2026-11-30", False)})
+    Store(vex_dir).add(
+        "alice", "CVE-2026-0002", product(), "not_affected", datetime(2026, 11, 20, tzinfo=UTC), impact_statement="No"
+    )
+
+    async def scenario() -> None:
+        tui = Tui(Store(vex_dir), METRICS_URL, "alice")
+        async with tui.run_test(size=SIZE) as pilot:
+            await pilot.press("u")
+            assert assessments(tui) == [("unassessed", "CVE-2026-0001"), ("expired", "CVE-2026-0002")]
+
+    asyncio.run(scenario())
+
+
 def test_labels_arent_markup(fake_http: FakeHttp, vex_dir: Path) -> None:
-    serve(fake_http, ("CVE-2026-0001", "container", "web/[b]app[/b]", "pkg"))
+    serve(fake_http, vex_dir, ("CVE-2026-0001", "container", "web/[b]app[/b]", "pkg"))
 
     async def scenario() -> None:
         tui = Tui(Store(vex_dir), METRICS_URL, "alice")

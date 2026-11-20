@@ -21,6 +21,8 @@ from advisory_map.inventory.debian import DebianHost, debian_hosts
 from advisory_map.inventory.mapping import Installed, Mapping, find, load_mapping
 from advisory_map.inventory.prometheus import PrometheusAPI
 from advisory_map.metrics import Collector
+from advisory_map.vex.assess import assess
+from advisory_map.vex.expiry import Fingerprints
 from advisory_map.vex.openvex import Store
 
 log = logging.getLogger(__name__)
@@ -38,11 +40,12 @@ def _finding_key(finding: Finding) -> _Key:
 
 
 def _enriched(finding: Finding, record: Details | None) -> Finding:
-    """The finding with what its CVE record adds: the weaknesses the record cites, if any, and its severity
-    where the record updated it after the finding's source. Debian's urgencies carry no date, so a CVE
-    record's CVSS severity takes their place."""
+    """The finding with what its CVE record adds: its fingerprint, the weaknesses the record cites, if any,
+    and its severity where the record updated it after the finding's source. Debian's urgencies carry no
+    date, so a CVE record's CVSS severity takes their place."""
     if record is None:
         return finding
+    finding = replace(finding, fingerprint=record.digest)
     if record.cwes:
         finding = replace(finding, cwes=record.cwes)
     found = record.severity
@@ -71,6 +74,7 @@ class App:
         if unknown := settings.feed_refresh_overrides.keys() - {feed.name for feed in self.feeds}:
             raise ValueError(f"FEED_REFRESH_ for unknown feeds: {', '.join(sorted(unknown))}")
         self.vex = Store(settings.vex_dir) if settings.vex_dir else None
+        self.fingerprints = Fingerprints(settings.vex_dir / ".fingerprints.json") if settings.vex_dir else None
         self.hosts: list[DebianHost] = []
         self.software: list[Installed] = []
         self.unmapped_images: list[str] = []
@@ -120,6 +124,12 @@ class App:
         findings, self.unmatched = self._match()
         records = self.cvelist.details({finding.cve for finding in findings})
         self.findings = [_enriched(finding, records.get(finding.cve)) for finding in findings]
+        if self.vex and self.fingerprints:
+            statements = self.vex.statements()
+            decided, _ = assess(self.findings, statements)
+            self.fingerprints.record(
+                [(statement, finding) for finding, statement in zip(self.findings, decided) if statement], statements
+            )
         self.last_match_success = now
 
     def run_once(self, now: float) -> None:

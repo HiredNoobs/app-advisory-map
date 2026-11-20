@@ -1,5 +1,6 @@
 """advisory-map vex: verdicts on the findings, run in the app's container (kubectl or docker exec). The
-findings come from the app's /metrics, the verdicts from the OpenVEX documents in VEX_DIR."""
+findings and their assessments come from the app's /metrics, which reads the OpenVEX documents in
+VEX_DIR again whenever one changes; verdicts are added to them."""
 
 import argparse
 import os
@@ -12,10 +13,12 @@ from prometheus_client.parser import text_string_to_metric_families
 
 from advisory_map.common import http
 from advisory_map.findings import Finding
-from advisory_map.vex.assess import assess, assessment
-from advisory_map.vex.openvex import JUSTIFICATIONS, STATUSES, Statement, Store, product
+from advisory_map.vex.assess import assess
+from advisory_map.vex.openvex import JUSTIFICATIONS, STATUSES, Store, product
 
 COLUMNS = ("ASSESSMENT", "CVE", "SEVERITY", "KIND", "TARGET", "PACKAGE", "VERSION")
+# Assessments with no verdict that holds.
+TO_ASSESS = ("unassessed", "expired")
 
 
 def now() -> datetime:
@@ -27,16 +30,16 @@ def metrics_url() -> str:
     return f"http://127.0.0.1:{os.environ.get('LISTEN_PORT', '8080')}/metrics"
 
 
-def findings(url: str) -> list[Finding]:
-    """The findings the app serves, by kind, target and CVE."""
+def findings(url: str) -> list[tuple[Finding, str]]:
+    """The findings the app serves with their assessments, by kind, target and CVE."""
     families = text_string_to_metric_families(http.get(url).body.decode())
     found = [
-        Finding.from_labels(sample.labels)
+        (Finding.from_labels(sample.labels), sample.labels.get("assessment", ""))
         for family in families
         if family.name == "advisory_map_vulnerability_info"
         for sample in family.samples
     ]
-    return sorted(found, key=lambda item: (item.target_kind, item.target, item.cve))
+    return sorted(found, key=lambda pair: (pair[0].target_kind, pair[0].target, pair[0].cve))
 
 
 def store(args: argparse.Namespace) -> Store:
@@ -51,10 +54,10 @@ def _table(rows: Sequence[Sequence[str]]) -> str:
     return "\n".join("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip() for row in rows)
 
 
-def row(finding: Finding, statement: Statement | None) -> tuple[str, ...]:
+def row(finding: Finding, assessment: str) -> tuple[str, ...]:
     """A finding's COLUMNS."""
     return (
-        assessment(statement)[0],
+        assessment,
         finding.cve,
         finding.severity,
         finding.target_kind,
@@ -65,12 +68,10 @@ def row(finding: Finding, statement: Statement | None) -> tuple[str, ...]:
 
 
 def list_findings(args: argparse.Namespace) -> None:
-    found = findings(args.url)
-    decided, _ = assess(found, store(args).statements())
     rows = [
-        row(item, statement)
-        for item, statement in zip(found, decided)
-        if (not args.unassessed or statement is None) and args.cve in (None, item.cve)
+        row(item, assessment)
+        for item, assessment in findings(args.url)
+        if (not args.unassessed or assessment in TO_ASSESS) and args.cve in (None, item.cve)
     ]
     print(_table([COLUMNS, *rows]))
 
@@ -99,7 +100,7 @@ def add(args: argparse.Namespace) -> None:
     except OSError as error:
         print(f"Couldn't read the findings to check it ({error}); it's saved all the same.")
         return
-    applying = sum(decided is not None for decided in assess(found, [statement])[0])
+    applying = sum(decided is not None for decided in assess([item for item, _ in found], [statement])[0])
     print(
         f"It applies to {applying} finding{'' if applying == 1 else 's'}." if applying else "It applies to no finding."
     )
@@ -119,7 +120,7 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
 
     listing = commands.add_parser("list", help="the findings and their assessments")
-    listing.add_argument("--unassessed", action="store_true", help="only those without a verdict")
+    listing.add_argument("--unassessed", action="store_true", help="only those without a verdict that holds")
     listing.add_argument("--cve", help="only this CVE's")
     listing.set_defaults(run=list_findings)
 

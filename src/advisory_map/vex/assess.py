@@ -34,8 +34,9 @@ def assess(
     return decided, [statement for index, statement in enumerate(statements) if index not in matched]
 
 
-def assessment(statement: Statement | None) -> tuple[str, str]:
-    """A finding's assessment and justification labels."""
+def assessment(statement: Statement | None, expired: bool = False) -> tuple[str, str]:
+    """A finding's assessment and justification labels: its verdict's, or expired with the justification
+    it no longer has."""
     if statement is None:
         return "unassessed", ""
-    return statement.status, statement.justification
+    return "expired" if expired else statement.status, statement.justification

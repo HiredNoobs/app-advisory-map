@@ -238,6 +238,26 @@ def test_match() -> None:
     assert list(match([vault], None, unmatched)) == []
 
 
+def test_fingerprint_follows_the_affected_ranges() -> None:
+    vault = Installed("software", "vault/vault-0/vault", "vault", None, VAULT, "v2.1.2", RELEASES)
+
+    def fingerprint(*records: dict[str, Any]) -> str:
+        [finding] = match([vault], index(*records), Counter())
+        return finding.fingerprint
+
+    first = fingerprint(record("GHSA-0001", fixed="2.1.5"), record("GO-2026-0001", aliases=("GHSA-0001",)))
+    assert first
+    assert fingerprint(record("GO-2026-0001", aliases=("GHSA-0001",)), record("GHSA-0001", fixed="2.1.5")) == first
+    assert fingerprint(record("GHSA-0001", fixed="2.1.6"), record("GO-2026-0001", aliases=("GHSA-0001",))) != first
+    assert (
+        fingerprint(
+            record("GHSA-0001", fixed="2.1.5", modified="2027-01-01T00:00:00Z"),
+            record("GO-2026-0001", aliases=("GHSA-0001",)),
+        )
+        == first
+    )
+
+
 def test_bounded_records_decide() -> None:
     found = index(
         # The Go database's range is left open, GitHub's ends before the installed version: not affected.

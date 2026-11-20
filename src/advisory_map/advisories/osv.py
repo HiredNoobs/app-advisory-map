@@ -20,7 +20,7 @@ from urllib.parse import quote
 from advisory_map.advisories import ranges, releases
 from advisory_map.advisories.feed import Feed, write_atomic
 from advisory_map.common import http
-from advisory_map.findings import Finding, Severity, cwe_ids
+from advisory_map.findings import Finding, Severity, cwe_ids, digest
 from advisory_map.inventory.mapping import Installed, Package
 
 log = logging.getLogger(__name__)
@@ -277,4 +277,6 @@ def match(
                 status="fix-available" if fixed else "open",
                 severity_updated=severity.updated,
                 cwes=cwe_ids(cwe for record in records for cwe in record.cwes),
+                # Of every record's affected ranges, in any order. A CVE record replaces it (app.py).
+                fingerprint=digest(sorted(digest(record.affected) for record in records)),
             )

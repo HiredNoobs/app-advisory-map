@@ -7,17 +7,18 @@ finding is served with the verdict that applies to it, so a dashboard can tell t
 looked at from those that were judged harmless:
 
 ```promql
-advisory_map_vulnerability_info{assessment="unassessed"}
+advisory_map_vulnerability_info{assessment=~"unassessed|expired"}
 advisory_map_vulnerability_info{assessment!="not_affected"}
 ```
 
-`assessment` is the verdict's status, or `unassessed` without one; `justification` is its
-justification, if it gives one. The documents are read again whenever one changes, at the next scrape.
+`assessment` is the verdict's status, `expired` once it no longer holds ([expiry](#expiry)), or
+`unassessed` without one; `justification` is its justification, if it gives one. The documents are read
+again whenever one changes, at the next scrape.
 
 ## The command line
 
 `advisory-map vex` runs in the app's container, where `VEX_DIR` is set and the app's `/metrics` (the
-findings) is on `127.0.0.1:$LISTEN_PORT`:
+findings and their assessments) is on `127.0.0.1:$LISTEN_PORT`:
 
 ```sh
 kubectl -n advisory-map exec deploy/advisory-map -- advisory-map vex list --unassessed
@@ -31,15 +32,15 @@ kubectl -n advisory-map exec -it deploy/advisory-map -- advisory-map vex tui --a
 (`docker exec` works the same way.) Whoever can exec into the container can add verdicts: there's no
 port to secure.
 
-- `list`: the findings with their assessments; `--unassessed` for those without a verdict, `--cve` for
-  one CVE's.
+- `list`: the findings with their assessments; `--unassessed` for those without a verdict that holds
+  (`unassessed` or `expired`), `--cve` for one CVE's.
 - `add <cve> --status <status>`: a verdict on the CVE wherever it's found, or only on `--kind`'s
   installations (a finding's `target_kind`), or only on `--target` and the targets under it (a
   finding's `target`, with its `--kind`). `not_affected` needs a `--justification` or an `--impact`
   (why, in words), `affected` an `--action` (what to do about it). It says how many findings the
   verdict applies to.
-- `tui`: the findings in a table (`u` shows only the unassessed, `r` reads them again), and a form for
-  a verdict on the selected one (`a` or Enter).
+- `tui`: the findings in a table (`u` shows only those without a verdict that holds, `r` reads them
+  again), and a form for a verdict on the selected one (`a` or Enter).
 
 The author is `--author`, or `VEX_AUTHOR`. `--vex-dir` and `--url` (the app's `/metrics`) are for
 running it elsewhere.
@@ -64,9 +65,9 @@ letters, digits, `.`, `_` and `-` replaced by `-`). `add` appends a statement to
 made, and increments its version; statements are never changed or removed. Of the statements about a
 finding, the latest decides, so a document is also its verdicts' history.
 
-Other documents in `VEX_DIR` (any `*.json`) are read too, but never written: they can come from
-elsewhere, such as [vexctl](https://github.com/openvex/vexctl). A document that isn't valid OpenVEX is
-left out whole, logged, and counted in `advisory_map_vex_invalid_documents`.
+Other documents in `VEX_DIR` (any `*.json` whose name doesn't start with a dot) are read too, but never
+written: they can come from elsewhere, such as [vexctl](https://github.com/openvex/vexctl). A document
+that isn't valid OpenVEX is left out whole, logged, and counted in `advisory_map_vex_invalid_documents`.
 
 A statement's products are installations, as IRIs of advisory-map's own:
 
@@ -82,5 +83,21 @@ finding's installation. Statements about other products (purls) are read, but ap
 
 Statements that apply to no finding, their vulnerability fixed or their installations gone, are
 counted in `advisory_map_vex_unmatched_statements`.
+
+## Expiry
+
+A verdict is judged on what its vulnerability's advisories said at the time. It expires, and the
+finding's assessment becomes `expired`, when:
+
+- **The advisories change what they say of how or where it's exploited.** For a CVE, that's its record's
+  state, or its CNA's descriptions, affected products, configurations or workarounds: not what's added
+  around them (scores, weaknesses, references, an ADP's enrichment). For an advisory without a CVE
+  record, its OSV records' affected ranges. The app keeps what they were when each verdict first
+  applied to a finding, in `VEX_DIR/.fingerprints.json`.
+- **It's been known to be exploited since:** CISA's KEV added it after the day the verdict was made.
+
+A new verdict on the finding, the same as before or not, holds until the next change. Losing
+`.fingerprints.json` only loses the comparison: verdicts start again from what the advisories say
+when the app next matches.
 
 `VEX_DIR` isn't a cache: back it up, and keep it apart from `DATA_DIR`, which can be thrown away.

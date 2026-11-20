@@ -18,7 +18,6 @@ from textual.widgets import (
 
 from advisory_map import cli
 from advisory_map.findings import Finding
-from advisory_map.vex.assess import assess
 from advisory_map.vex.openvex import JUSTIFICATIONS, STATUSES, Store, product
 
 
@@ -114,7 +113,8 @@ class Tui(App[None]):
         self.url = url
         self.author = author
         self.only_unassessed = False
-        self.findings: list[Finding] = []
+        # With their assessments, as the app serves them.
+        self.findings: list[tuple[Finding, str]] = []
         # The findings in the table, row by row.
         self.shown: list[Finding] = []
 
@@ -137,15 +137,14 @@ class Tui(App[None]):
         self.show()
 
     def show(self) -> None:
-        """The findings again, with the verdicts as they are now; the cursor stays on its row."""
+        """The findings again; the cursor stays on its row."""
         table = self.query_one(DataTable)
         row = table.cursor_row
-        decided, _ = assess(self.findings, self.store.statements())
         table.clear()
         self.shown = []
-        for finding, statement in zip(self.findings, decided):
-            if not self.only_unassessed or statement is None:
-                table.add_row(*(Text(cell) for cell in cli.row(finding, statement)))
+        for finding, assessment in self.findings:
+            if not self.only_unassessed or assessment in cli.TO_ASSESS:
+                table.add_row(*(Text(cell) for cell in cli.row(finding, assessment)))
                 self.shown.append(finding)
         table.move_cursor(row=min(row, len(self.shown) - 1))
 
@@ -163,4 +162,4 @@ class Tui(App[None]):
 
     def _assessed(self, saved: bool | None) -> None:
         if saved:
-            self.show()
+            self.action_reload()

@@ -80,7 +80,7 @@ report the running images it doesn't cover.
 
 ## Metrics
 
-- `advisory_map_vulnerability_info{cve, severity, severity_source, source, target_kind, target, namespace, package, installed_version, fixed_version, status, kev, kev_date_added, kev_ransomware, assessment, justification}`: 1 per CVE that applies (an OSV advisory's own ID where it has no CVE), gone once it doesn't. `source` is `debian`, `cve.org` or `osv`; `status` is `fix-available`, or why there's no fix (`open`, `no-dsa`, `postponed`, `ignored`, `undetermined`), or `unconfirmed`: affected only by the record's default (see [versions](docs/mapping.md#versions)). `assessment` is its [verdict](docs/vex.md)'s status (`not_affected`, `affected`, `fixed`, `under_investigation`) or `unassessed`, with the verdict's `justification` if it gives one.
+- `advisory_map_vulnerability_info{cve, severity, severity_source, source, target_kind, target, namespace, package, installed_version, fixed_version, status, kev, kev_date_added, kev_ransomware, assessment, justification}`: 1 per CVE that applies (an OSV advisory's own ID where it has no CVE), gone once it doesn't. `source` is `debian`, `cve.org` or `osv`; `status` is `fix-available`, or why there's no fix (`open`, `no-dsa`, `postponed`, `ignored`, `undetermined`), or `unconfirmed`: affected only by the record's default (see [versions](docs/mapping.md#versions)). `assessment` is its [verdict](docs/vex.md)'s status (`not_affected`, `affected`, `fixed`, `under_investigation`), `expired` once the verdict no longer holds (its advisories changed, or it's been exploited since), or `unassessed`, with the verdict's `justification` if it gives one.
 - `advisory_map_vulnerability_cwe_info{cve, cwe, cwe_name}`: 1 per weakness (CWE) of a CVE in `advisory_map_vulnerability_info`, with its name in the catalogue (empty for an ID it doesn't have). Joined on `cve`, e.g. CVEs per weakness: `count by (cwe, cwe_name) (advisory_map_vulnerability_cwe_info and on (cve) advisory_map_vulnerability_info{target_kind="debian-package"})`.
 - `advisory_map_inventory_packages{target_kind, target}`: packages known per host (0: no `dpkg_package_info` for it), and mapped installations per target.
 - `advisory_map_unmapped_image_info{image}`: a running image no mapping entry covers, when the mapping has an `[images]` query.
@@ -96,7 +96,7 @@ The package `advisory_map` (tests mirror it):
 - `inventory/`: what's installed, from Prometheus (`debian.py` hosts and packages, `mapping.py` everything else).
 - `advisories/`: a module per feed (`debian.py`, `cvelist.py`, `osv.py`, `kev.py`, `cwe.py`, `releases.py`), each with its matcher; `feed.py` is their base, `ranges.py` the version ranges they match.
 - `common/`: HTTP and streamed JSON.
-- `vex/`: the verdicts, `openvex.py` reading and writing their documents, `assess.py` which applies to each finding.
+- `vex/`: the verdicts, `openvex.py` reading and writing their documents, `assess.py` which applies to each finding, `expiry.py` when it no longer holds.
 - `app.py` the match loop, `findings.py` its result, `metrics.py` `/metrics`, `config.py` the settings.
 - `cli.py` `advisory-map vex`, `tui.py` its terminal UI.
 

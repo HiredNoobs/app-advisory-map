@@ -2,18 +2,23 @@ import io
 import json
 import subprocess
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from email.message import Message
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from prometheus_client import CollectorRegistry, generate_latest
-from prometheus_client.core import GaugeMetricFamily
 
 from advisory_map.advisories.cvelist import record_path
+from advisory_map.advisories.kev import Exploited
 from advisory_map.common import http
+from advisory_map.findings import Finding
+from advisory_map.metrics import Collector
+from advisory_map.vex.openvex import Store
 
 
 @pytest.fixture(autouse=True)
@@ -206,28 +211,37 @@ def fake_http(monkeypatch: pytest.MonkeyPatch) -> FakeHttp:
 METRICS_URL = "http://127.0.0.1:8080/metrics"
 
 
-class Served:
-    """The app's /metrics with these findings: (cve, kind, target, package)."""
+def serve(
+    fake_http: FakeHttp,
+    vex_dir: Path,
+    *findings: tuple[str, str, str, str],
+    kev: Mapping[str, Exploited] | None = None,
+) -> None:
+    """The app's /metrics with these findings, (cve, kind, target, package), assessed by its collector from
+    the documents in vex_dir as they are at each request."""
+    app = SimpleNamespace(
+        findings=[
+            Finding(cve, "high", "osv", "osv", kind, target, "", package, "1.0.0", "", "open")
+            for cve, kind, target, package in findings
+        ],
+        kev=SimpleNamespace(data=kev or {}),
+        cwe=SimpleNamespace(data={}),
+        vex=Store(vex_dir),
+        fingerprints=None,
+        hosts=[],
+        software=[],
+        unmapped_images=[],
+        unmatched=Counter(),
+        feeds=(),
+        last_match_success=None,
+    )
 
-    def __init__(self, *findings: tuple[str, str, str, str]) -> None:
-        self.findings = findings
+    def page(url: str) -> http.Response:
+        registry = CollectorRegistry()
+        registry.register(Collector(app))  # type: ignore[arg-type]
+        return response(generate_latest(registry))
 
-    def collect(self) -> list[GaugeMetricFamily]:
-        family = GaugeMetricFamily(
-            "advisory_map_vulnerability_info",
-            "",
-            labels=["cve", "severity", "target_kind", "target", "package", "installed_version", "assessment"],
-        )
-        for cve, kind, target, package in self.findings:
-            # The server's assessment: the CLI and TUI ignore it, they decide from the documents.
-            family.add_metric([cve, "high", kind, target, package, "1.0.0", "fixed"], 1)
-        return [family]
-
-
-def serve(fake_http: FakeHttp, *findings: tuple[str, str, str, str]) -> None:
-    registry = CollectorRegistry()
-    registry.register(Served(*findings))
-    fake_http.routes[METRICS_URL] = response(generate_latest(registry))
+    fake_http.routes[METRICS_URL] = page
 
 
 FINDINGS = (

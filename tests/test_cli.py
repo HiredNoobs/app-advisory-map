@@ -1,17 +1,19 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import FINDINGS, METRICS_URL, FakeHttp, response, serve
 
 from advisory_map import __main__, cli
+from advisory_map.advisories.kev import Exploited
 from advisory_map.vex.openvex import Store, product
 
 pytestmark = pytest.mark.usefixtures("vex_dir")
 
 
 def test_list(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    serve(fake_http, *FINDINGS)
+    serve(fake_http, vex_dir, *FINDINGS)
     Store(vex_dir).add(
         "alice",
         "CVE-2026-0002",
@@ -33,6 +35,21 @@ def test_list(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[
     assert [line.split()[1] for line in capsys.readouterr().out.splitlines()[1:]] == ["CVE-2026-0002"]
 
 
+def test_list_shows_the_apps_assessments(
+    fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Exploited since the verdict on it: expired, so it needs assessing again.
+    serve(fake_http, vex_dir, *FINDINGS, kev={"CVE-2026-0002": Exploited("2026-11-30", False)})
+    Store(vex_dir).add(
+        "alice", "CVE-2026-0002", product(), "not_affected", datetime(2026, 11, 20, tzinfo=UTC), impact_statement="No"
+    )
+    assert cli.main(["list", "--unassessed"]) == 0
+    assert [line.split()[:2] for line in capsys.readouterr().out.splitlines()[1:]] == [
+        ["unassessed", "CVE-2026-0001"],
+        ["expired", "CVE-2026-0002"],
+    ]
+
+
 def test_list_from_another_port(fake_http: FakeHttp, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LISTEN_PORT", "9000")
     fake_http.routes["http://127.0.0.1:9000/metrics"] = response(b"")
@@ -47,7 +64,7 @@ def test_list_without_the_app(fake_http: FakeHttp, capsys: pytest.CaptureFixture
 
 
 def test_add(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    serve(fake_http, *FINDINGS)
+    serve(fake_http, vex_dir, *FINDINGS)
     code = cli.main(
         [
             "add",
@@ -88,15 +105,15 @@ def test_add_everywhere_with_the_author_from_the_environment(
 
 
 def test_add_checks_its_own_statement(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    serve(fake_http, *FINDINGS)
+    serve(fake_http, vex_dir, *FINDINGS)
     # Another author's document, read after alice's.
     Store(vex_dir).add("bob", "CVE-2026-0009", product(), "fixed", cli.now())
     assert cli.main(["add", "CVE-2026-0001", "--status", "fixed", "--author", "alice"]) == 0
     assert "applies to 1 finding" in capsys.readouterr().out
 
 
-def test_add_matching_nothing(fake_http: FakeHttp, capsys: pytest.CaptureFixture[str]) -> None:
-    serve(fake_http, *FINDINGS)
+def test_add_matching_nothing(fake_http: FakeHttp, vex_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    serve(fake_http, vex_dir, *FINDINGS)
     assert cli.main(["add", "CVE-2026-0001", "--kind", "talos", "--status", "fixed", "--author", "alice"]) == 0
     assert "applies to no finding" in capsys.readouterr().out
 

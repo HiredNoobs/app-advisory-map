@@ -222,6 +222,49 @@ def test_fixed_finding_disappears(app: App, prometheus: FakePrometheus) -> None:
     assert [labels["cve"] for labels, _ in scrape(app)["advisory_map_vulnerability_info"]] == ["CVE-2026-0002"]
 
 
+def test_verdicts_expire(env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path) -> None:
+    def cve_record(description: str) -> dict[str, Any]:
+        item = record("CVE-2026-0002", product="openssl")
+        item["containers"]["cna"]["descriptions"] = [{"lang": "en", "value": description}]
+        return item
+
+    origin.commit(cve_record("A crash."))
+    vex = tmp_path / "vex"
+    store = Store(vex)
+    # CVE-2026-0001 has been in KEV since 2026-10-30.
+    for cve, day in (
+        ("CVE-2026-0001", datetime(2026, 10, 1, tzinfo=UTC)),
+        ("CVE-2026-0002", datetime(2026, 11, 1, tzinfo=UTC)),
+    ):
+        store.add("alice", cve, product(), "not_affected", day, justification="component_not_present")
+    app = App(Settings.from_env({**env, "VEX_DIR": str(vex)}))
+
+    def assessments() -> dict[str, str]:
+        return {labels["cve"]: labels["assessment"] for labels, _ in scrape(app)["advisory_map_vulnerability_info"]}
+
+    app.run_once(1000)
+    assert assessments() == {"CVE-2026-0001": "expired", "CVE-2026-0002": "not_affected"}
+    origin.commit(cve_record("A crash when TLS is off."))
+    app.run_once(1000 + 86400)
+    assert assessments() == {"CVE-2026-0001": "expired", "CVE-2026-0002": "expired"}
+    # A verdict made again holds until the next change.
+    store.add(
+        "alice",
+        "CVE-2026-0002",
+        product(),
+        "not_affected",
+        datetime(2026, 11, 2, tzinfo=UTC),
+        justification="component_not_present",
+    )
+    app.run_once(1000 + 86400)
+    assert assessments()["CVE-2026-0002"] == "not_affected"
+    # The fingerprints outlast a restart.
+    origin.commit(cve_record("A crash when TLS is off, or on."))
+    app = App(Settings.from_env({**env, "VEX_DIR": str(vex)}))
+    app.run_once(1000 + 2 * 86400)
+    assert assessments()["CVE-2026-0002"] == "expired"
+
+
 def test_cve_records(env: dict[str, str], origin: Origin, fake_http: FakeHttp, tmp_path: Path) -> None:
     mapping = tmp_path / "mapping.toml"
     mapping.write_text(

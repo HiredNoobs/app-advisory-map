@@ -2,6 +2,7 @@ import json
 import logging
 import subprocess
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -12,7 +13,6 @@ from advisory_map.advisories import releases
 from advisory_map.advisories.cvelist import (
     Advisory,
     CveList,
-    Details,
     Index,
     bounded,
     details,
@@ -248,9 +248,10 @@ def test_details(feed: CveList, origin: Origin) -> None:
     )
     assert feed.details({"CVE-2026-0001"}) == {}
     feed.update(1000, DAY)
-    assert feed.details({"CVE-2026-0001", "CVE-2026-0002", "CVE-2026-9999", "TEMP-0000000-ABCDEF"}) == {
-        "CVE-2026-0001": Details(Severity("high", "2026-01-01T00:00:00.000Z"), ("CWE-125", "CWE-20", "CWE-787")),
-        "CVE-2026-0002": Details(None, ()),
+    found = feed.details({"CVE-2026-0001", "CVE-2026-0002", "CVE-2026-9999", "TEMP-0000000-ABCDEF"})
+    assert {cve: (item.severity, item.cwes) for cve, item in found.items()} == {
+        "CVE-2026-0001": (Severity("high", "2026-01-01T00:00:00.000Z"), ("CWE-125", "CWE-20", "CWE-787")),
+        "CVE-2026-0002": (None, ()),
     }
 
 
@@ -260,7 +261,33 @@ def test_details_without_a_cwe_id() -> None:
     item["containers"]["cna"]["problemTypes"] = [
         {"descriptions": [{"lang": "en", "type": "text", "description": "n/a"}]}
     ]
-    assert details(item) == Details(None, ())
+    assert details(item).cwes == ()
+
+
+def test_digest_follows_what_a_verdict_depends_on() -> None:
+    def digest(change: Callable[[dict[str, Any]], object] = lambda item: None) -> str:
+        item = record("CVE-2026-0001", affected("1.0"), adp_cwes=["CWE-20"])
+        item["containers"]["cna"].update(
+            descriptions=[{"lang": "en", "value": "An overflow when OIDC is enabled."}],
+            configurations=[{"lang": "en", "value": "OIDC is enabled."}],
+            workarounds=[{"lang": "en", "value": "Turn OIDC off."}],
+        )
+        change(item)
+        return details(item).digest
+
+    cna = lambda item: item["containers"]["cna"]  # noqa: E731
+    unchanged = digest()
+    # What says how it's exploited, and where.
+    assert digest(lambda item: cna(item)["descriptions"][0].update(value="An overflow.")) != unchanged
+    assert digest(lambda item: cna(item)["configurations"].clear()) != unchanged
+    assert digest(lambda item: cna(item)["workarounds"].clear()) != unchanged
+    assert digest(lambda item: cna(item)["affected"][0]["versions"].append({"version": "2.0"})) != unchanged
+    assert digest(lambda item: item["cveMetadata"].update(state="REJECTED")) != unchanged
+    # Not what's added around it: scores, weaknesses, references, an ADP's enrichment, dates.
+    assert digest(lambda item: cna(item).update(metrics=[cvss("cvssV3_1", baseSeverity="HIGH")])) == unchanged
+    assert digest(lambda item: cna(item).update(references=[{"url": "https://example.com"}])) == unchanged
+    assert digest(lambda item: cna(item)["providerMetadata"].update(dateUpdated="2027-01-01")) == unchanged
+    assert digest(lambda item: item["containers"]["adp"][0].update(affected=[{"product": "x"}])) == unchanged
 
 
 def test_match() -> None:
