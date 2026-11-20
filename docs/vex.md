@@ -41,9 +41,16 @@ port to secure.
   says how many findings the verdict applies to.
 - `prune`: the statements that apply to no finding ([unmatched](#unmatched-statements)); `--apply`
   moves them to the archive.
-- `tui`: the findings in a table, read again every minute (`u` shows only those without a verdict that
-  holds, `r` reads them now), and a form for a verdict on the selected one (`a` or Enter) that asks for
-  what its status needs.
+- `tui`: the findings in a table, read again every minute (`r` reads them now), and a form for a verdict
+  on the selected one (`a` or Enter) that asks for what its status needs. `u` shows only those without a
+  verdict that holds; `/` filters them by words in any column, or `column:value` in one
+  (`severity:critical`, `target:web/`), Enter keeping the filter and Escape clearing it. Tab (or →)
+  completes the word being typed: a column's name, then its values (severities the most severe first,
+  others the most common), or any column's. They're sorted by kind, target and CVE; a column's header,
+  or its number (`1` to `7`, left to right), sorts them by it (severity most severe first), again the
+  other way, and again as they were, its arrow saying which: ▲, or ▼ reversed. `o` copies the selected
+  finding's advisory link to the clipboard of the terminal it's shown in: Debian's security tracker for
+  a Debian package, cve.org for any other CVE, osv.dev for the rest.
 
 The author is `--author`, or `VEX_AUTHOR`. `--vex-dir` and `--url` (the app's `/metrics`) are for
 running it elsewhere.
