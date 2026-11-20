@@ -47,7 +47,7 @@ port to secure.
   (`severity:critical`, `target:web/`), Enter keeping the filter and Escape clearing it. Tab (or →)
   completes the word being typed: a column's name, then its values (severities the most severe first,
   others the most common), or any column's. They're sorted by kind, target and CVE; a column's header,
-  or its number (`1` to `7`, left to right), sorts them by it (severity most severe first), again the
+  or its number (`1` to `8`, left to right), sorts them by it (severity most severe first), again the
   other way, and again as they were, its arrow saying which: ▲, or ▼ reversed. `o` copies the selected
   finding's advisory link to the clipboard of the terminal it's shown in: Debian's security tracker for
   a Debian package, cve.org for any other CVE, osv.dev for the rest.

@@ -17,7 +17,7 @@ from advisory_map.findings import Finding
 from advisory_map.vex.assess import assess
 from advisory_map.vex.openvex import ARCHIVE, JUSTIFICATIONS, STATUSES, Store, product
 
-COLUMNS = ("ASSESSMENT", "CVE", "SEVERITY", "KIND", "TARGET", "PACKAGE", "VERSION")
+COLUMNS = ("ASSESSMENT", "CVE", "SEVERITY", "KIND", "TARGET", "PACKAGE", "VERSION", "FIXED")
 # Assessments with no verdict that holds.
 TO_ASSESS = ("unassessed", "expired")
 
@@ -72,6 +72,7 @@ def row(finding: Finding, assessment: str) -> tuple[str, ...]:
         finding.target,
         finding.package,
         finding.installed_version,
+        finding.fixed_version,
     )
 
 

@@ -362,7 +362,7 @@ def test_sort(fake_http: FakeHttp, vex_dir: Path) -> None:
             assert cves(tui) == ["CVE-1", "CVE-2", "CVE-3"] and arrows() == 0
             # The footer has one entry for them all.
             shown = [active.binding for active in tui.active_bindings.values() if active.binding.show]
-            assert [binding.key_display for binding in shown if binding.description == "Sort"] == ["1-7"]
+            assert [binding.key_display for binding in shown if binding.description == "Sort"] == ["1-8"]
             # A header, or its number, sorts by its column: the most severe first; again, the other way;
             # again, as it was. Its arrow says which, in room every header keeps for it.
             severity = header().index("SEVERITY")
