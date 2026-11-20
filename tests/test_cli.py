@@ -124,6 +124,11 @@ def test_add_matching_nothing(fake_http: FakeHttp, vex_dir: Path, capsys: pytest
         (["add", "CVE-1", "--status", "fixed"], "--author"),
         (["add", "CVE-1", "--status", "not_affected", "--author", "alice"], "justification or an impact_statement"),
         (["add", "CVE-1", "--target", "host-1", "--status", "fixed", "--author", "alice"], "--kind"),
+        (
+            ["add", "CVE-1", "--status", "affected", "--action", "Upgrade", "--impact", "No", "--author", "alice"],
+            "only for not_affected",
+        ),
+        (["add", "CVE-1", "--status", "fixed", "--action", "Upgrade", "--author", "alice"], "only for affected"),
     ],
 )
 def test_add_errors(args: list[str], message: str, capsys: pytest.CaptureFixture[str]) -> None:

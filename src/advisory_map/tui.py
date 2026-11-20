@@ -21,8 +21,18 @@ from advisory_map.findings import Finding
 from advisory_map.vex.openvex import JUSTIFICATIONS, STATUSES, Store, product
 
 
-def _value(select: Select[str]) -> str:
-    return "" if select.value is Select.NULL else str(select.value)
+def _value(field: Select[str] | Input) -> str:
+    """What a field holds: nothing for a Select left blank."""
+    return "" if field.value is Select.NULL else str(field.value).strip()
+
+
+def _key(finding: Finding) -> tuple[str, str, str, str]:
+    """What a finding is, however its severity or fix changes."""
+    return finding.cve, finding.target_kind, finding.target, finding.package
+
+
+# The form's fields that only one status uses, and that status.
+_USED_BY = {"justification": "not_affected", "impact": "not_affected", "action": "affected"}
 
 
 class Assess(ModalScreen[bool]):
@@ -61,15 +71,33 @@ class Assess(ModalScreen[bool]):
             yield Select(
                 [(justification, justification) for justification in JUSTIFICATIONS],
                 id="justification",
-                prompt="Justification (not_affected)",
+                prompt="Justification",
             )
             yield Input(placeholder="Impact statement: why it's not affected", id="impact")
-            yield Input(placeholder="Action statement: what to do about it, when it's affected", id="action")
+            yield Input(placeholder="Action statement: what to do about it", id="action")
             yield Input(value=self.author, placeholder="Author", id="author")
             yield Static(id="error", markup=False)
             with Horizontal():
                 yield Button("Save", id="save", variant="primary")
                 yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        self._show_fields()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "status":
+            self._show_fields()
+
+    def _show_fields(self) -> None:
+        """Only the fields the status uses."""
+        status = _value(self.query_one("#status", Select))
+        for name, used_by in _USED_BY.items():
+            self.query_one(f"#{name}").display = status == used_by
+
+    @staticmethod
+    def _given(field: Select[str] | Input) -> str:
+        """What a field holds, if it's shown: one hidden since it was filled in isn't saved."""
+        return _value(field) if field.display else ""
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -78,7 +106,7 @@ class Assess(ModalScreen[bool]):
         if event.button.id != "save":
             self.dismiss(False)
             return
-        author = self.query_one("#author", Input).value.strip()
+        author = _value(self.query_one("#author", Input))
         try:
             if not author:
                 raise ValueError("Who's saying so: the author is needed.")
@@ -88,9 +116,9 @@ class Assess(ModalScreen[bool]):
                 _value(self.query_one("#scope", Select)),
                 _value(self.query_one("#status", Select)),
                 cli.now(),
-                justification=_value(self.query_one("#justification", Select)),
-                impact_statement=self.query_one("#impact", Input).value.strip(),
-                action_statement=self.query_one("#action", Input).value.strip(),
+                justification=self._given(self.query_one("#justification", Select)),
+                impact_statement=self._given(self.query_one("#impact", Input)),
+                action_statement=self._given(self.query_one("#action", Input)),
             )
         except ValueError as error:
             self.query_one("#error", Static).update(str(error))
@@ -102,17 +130,22 @@ class Tui(App[None]):
     TITLE = "advisory-map"
     BINDINGS = [
         ("a", "assess", "Assess"),
-        ("u", "unassessed", "Unassessed only"),
+        # u toggles: the footer offers whichever it does next.
+        ("u", "filter(True)", "Show unassessed"),
+        ("u", "filter(False)", "Show all"),
         ("r", "reload", "Reload"),
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, store: Store, url: str, author: str) -> None:
+    def __init__(self, store: Store, url: str, author: str, reload_interval: float = 60) -> None:
         super().__init__()
         self.store = store
         self.url = url
         self.author = author
-        self.only_unassessed = False
+        # Seconds between reads of the findings: the app matches them again, and others add verdicts.
+        self.reload_interval = reload_interval
+        # Only the findings without a verdict that holds.
+        self.to_assess_only = False
         # With their assessments, as the app serves them.
         self.findings: list[tuple[Finding, str]] = []
         # The findings in the table, row by row.
@@ -126,30 +159,38 @@ class Tui(App[None]):
     def on_mount(self) -> None:
         self.query_one(DataTable).add_columns(*cli.COLUMNS)
         self.action_reload()
+        self.set_interval(self.reload_interval, self.action_reload)
 
     def action_reload(self) -> None:
+        """The findings read again. Without the app, those last read stay, and the title says so."""
         try:
             self.findings = cli.findings(self.url)
             self.sub_title = f"{len(self.findings)} findings"
         except OSError as error:
-            self.findings = []
             self.sub_title = f"Couldn't read the findings: {error}"
         self.show()
 
     def show(self) -> None:
-        """The findings again; the cursor stays on its row."""
+        """The findings again. The cursor stays on its finding, or on its row once the finding's gone."""
         table = self.query_one(DataTable)
         row = table.cursor_row
+        selected = _key(self.shown[row]) if 0 <= row < len(self.shown) else None
         table.clear()
         self.shown = []
         for finding, assessment in self.findings:
-            if not self.only_unassessed or assessment in cli.TO_ASSESS:
+            if not self.to_assess_only or assessment in cli.TO_ASSESS:
                 table.add_row(*(Text(cell) for cell in cli.row(finding, assessment)))
                 self.shown.append(finding)
-        table.move_cursor(row=min(row, len(self.shown) - 1))
+        keys = [_key(finding) for finding in self.shown]
+        table.move_cursor(row=keys.index(selected) if selected in keys else min(row, len(self.shown) - 1))
 
-    def action_unassessed(self) -> None:
-        self.only_unassessed = not self.only_unassessed
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # Of the two filter bindings, only the one that changes it.
+        return action != "filter" or parameters != (self.to_assess_only,)
+
+    def action_filter(self, to_assess_only: bool) -> None:
+        self.to_assess_only = to_assess_only
+        self.refresh_bindings()
         self.show()
 
     def action_assess(self) -> None:

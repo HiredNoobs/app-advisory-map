@@ -213,7 +213,12 @@ class Store:
         impact_statement: str = "",
         action_statement: str = "",
     ) -> Statement:
-        """A statement appended to the author's document (created without one), which is written whole."""
+        """A statement appended to the author's document (created without one), which is written whole.
+        It's given only the fields its status uses: documents read can have others, but they mean nothing."""
+        if (justification or impact_statement) and status != "not_affected":
+            raise ValueError("a justification or an impact_statement is only for not_affected")
+        if action_statement and status != "affected":
+            raise ValueError("an action_statement is only for affected")
         item: dict[str, Any] = {
             "vulnerability": {"name": vulnerability},
             "products": [{"@id": product_id}],

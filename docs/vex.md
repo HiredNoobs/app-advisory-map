@@ -37,12 +37,13 @@ port to secure.
 - `add <cve> --status <status>`: a verdict on the CVE wherever it's found, or only on `--kind`'s
   installations (a finding's `target_kind`), or only on `--target` and the targets under it (a
   finding's `target`, with its `--kind`). `not_affected` needs a `--justification` or an `--impact`
-  (why, in words), `affected` an `--action` (what to do about it). It says how many findings the
-  verdict applies to.
+  (why, in words), `affected` an `--action` (what to do about it), and no other status takes them. It
+  says how many findings the verdict applies to.
 - `prune`: the statements that apply to no finding ([unmatched](#unmatched-statements)); `--apply`
   moves them to the archive.
-- `tui`: the findings in a table (`u` shows only those without a verdict that holds, `r` reads them
-  again), and a form for a verdict on the selected one (`a` or Enter).
+- `tui`: the findings in a table, read again every minute (`u` shows only those without a verdict that
+  holds, `r` reads them now), and a form for a verdict on the selected one (`a` or Enter) that asks for
+  what its status needs.
 
 The author is `--author`, or `VEX_AUTHOR`. `--vex-dir` and `--url` (the app's `/metrics`) are for
 running it elsewhere.
