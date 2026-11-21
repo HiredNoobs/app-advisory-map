@@ -29,8 +29,7 @@ kubectl -n advisory-map exec deploy/advisory-map -- advisory-map vex add CVE-202
 kubectl -n advisory-map exec -it deploy/advisory-map -- advisory-map vex tui --author alice
 ```
 
-(`docker exec` works the same way.) Whoever can exec into the container can add verdicts: there's no
-port to secure.
+(`docker exec` works the same way.) Whoever can exec into the container can add verdicts, as anyone.
 
 - `list`: the findings with their assessments; `--unassessed` for those without a verdict that holds
   (`unassessed` or `expired`), `--cve` for one CVE's.
@@ -54,6 +53,31 @@ port to secure.
 
 The author is `--author`, or `VEX_AUTHOR`. `--vex-dir` and `--url` (the app's `/metrics`) are for
 running it elsewhere.
+
+## The page
+
+With `WEB_PORT` set, the app also serves a page for a CVE's findings, which a dashboard links to:
+
+```text
+/assess?cve=CVE-2026-0001&kind=container&target=web/frontend
+/assess?cve=CVE-2026-0002&package=openssl
+```
+
+`kind`, `target` and `package` (each optional) narrow it to some of the CVE's findings. It shows them
+with their assessments, every statement about the CVE, and a form for a new verdict, which starts from
+the one they share. A verdict is never edited: a new one takes over.
+It can cover the one target (when the page shows one), every installation of a kind the findings are,
+or everything.
+
+The page writes verdicts, so it's on a port of its own, for an authenticating proxy to reach and nothing
+else: the app trusts the header `WEB_AUTHOR_HEADER` names to say who's saving, and refuses a save
+without it. Set it to the header your proxy passes the signed-in user in: `Remote-User` (Authelia,
+Caddy's `forward_auth`), `X-Forwarded-User` (oauth2-proxy), `X-authentik-username` (authentik),
+`Tailscale-User-Login` (Tailscale Serve), or whichever an ext-auth or forward-auth setup (Envoy,
+Traefik, nginx's `auth_request`) is told to pass on. The proxy must set the header itself, replacing any
+the client sent, and nothing else may reach the port: anyone who can send the header can save as
+anyone. Forms sent from another site are refused. Without `WEB_AUTHOR_HEADER` the form asks for the
+author: only for running it locally.
 
 ## Statuses and justifications
 

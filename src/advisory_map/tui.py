@@ -2,7 +2,6 @@
 
 from collections import Counter
 from collections.abc import Callable, Iterable
-from urllib.parse import quote
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -23,7 +22,7 @@ from textual.widgets import (
 )
 
 from advisory_map import cli
-from advisory_map.findings import Finding
+from advisory_map.findings import Finding, advisory_url
 from advisory_map.vex.openvex import JUSTIFICATIONS, STATUSES, Store, product
 
 
@@ -105,17 +104,6 @@ class _Filter(Input):
     """The filter, Tab taking its suggestion as the right arrow does."""
 
     BINDINGS = [Binding("tab", "cursor_right", "Complete", show=False)]
-
-
-def advisory_url(finding: Finding) -> str:
-    """Where to read the finding's advisory: Debian's tracker for a Debian package (its fixes, and its
-    own TEMP- IDs), cve.org for any other CVE, osv.dev for the rest (GHSA-, PYSEC-, GO-...)."""
-    name = quote(finding.cve, safe="")
-    if finding.source == "debian":
-        return f"https://security-tracker.debian.org/tracker/{name}"
-    if finding.cve.startswith("CVE-"):
-        return f"https://www.cve.org/CVERecord?id={name}"
-    return f"https://osv.dev/vulnerability/{name}"
 
 
 # The form's fields that only one status uses, and that status.

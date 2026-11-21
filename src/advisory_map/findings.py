@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from typing import Any, NamedTuple
+from urllib.parse import quote
 
 _CWE = re.compile(r"CWE-\d+")
 
@@ -62,3 +63,14 @@ def digest(value: object) -> str:
 def cwe_ids(values: Iterable[object]) -> tuple[str, ...]:
     """The CWE IDs among a record's values, once each."""
     return tuple(sorted({value for value in values if isinstance(value, str) and _CWE.fullmatch(value)}))
+
+
+def advisory_url(finding: Finding) -> str:
+    """Where to read the finding's advisory: Debian's tracker for a Debian package (its fixes, and its
+    own TEMP- IDs), cve.org for any other CVE, osv.dev for the rest (GHSA-, PYSEC-, GO-...)."""
+    name = quote(finding.cve, safe="")
+    if finding.source == "debian":
+        return f"https://security-tracker.debian.org/tracker/{name}"
+    if finding.cve.startswith("CVE-"):
+        return f"https://www.cve.org/CVERecord?id={name}"
+    return f"https://osv.dev/vulnerability/{name}"

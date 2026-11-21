@@ -13,8 +13,7 @@ from prometheus_client.registry import Collector as _Collector
 
 from advisory_map.advisories.kev import Exploited
 from advisory_map.findings import LABELS
-from advisory_map.vex.assess import assess, assessment
-from advisory_map.vex.expiry import expired
+from advisory_map.vex.assess import assessed
 
 if TYPE_CHECKING:
     from advisory_map.app import App
@@ -37,17 +36,20 @@ class Collector(_Collector):
         kev = app.kev.data or {}
         # Once: a match replaces them meanwhile. Verdicts are read at each scrape, so a new one shows
         # without waiting for a match.
-        findings = app.findings
-        decided, unmatched_statements = assess(findings, app.vex.statements() if app.vex else [])
+        assessments, unmatched_statements = assessed(
+            app.findings,
+            app.vex.statements() if app.vex else [],
+            app.fingerprints.data if app.fingerprints else {},
+            kev,
+        )
 
         vulnerabilities = GaugeMetricFamily(
             "advisory_map_vulnerability_info", "A CVE that applies to something running.", labels=_FINDING_LABELS
         )
-        seen = app.fingerprints.data if app.fingerprints else {}
-        for finding, statement in zip(findings, decided):
-            labels = [getattr(finding, label) for label in LABELS]
-            stale = statement is not None and expired(statement, finding, seen, kev)
-            vulnerabilities.add_metric([*labels, *_kev_labels(kev.get(finding.cve)), *assessment(statement, stale)], 1)
+        for item in assessments:
+            labels = [getattr(item.finding, label) for label in LABELS]
+            kev_labels = _kev_labels(kev.get(item.finding.cve))
+            vulnerabilities.add_metric([*labels, *kev_labels, item.assessment, item.justification], 1)
         yield vulnerabilities
 
         weaknesses = GaugeMetricFamily(

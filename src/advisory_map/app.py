@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from prometheus_client import REGISTRY, start_http_server
 
+from advisory_map import web
 from advisory_map.advisories import cvelist, debian, osv
 from advisory_map.advisories.cvelist import CveList, Details
 from advisory_map.advisories.cwe import Cwe
@@ -151,6 +152,8 @@ class App:
     def run(self) -> None:
         REGISTRY.register(Collector(self))
         start_http_server(self.settings.listen_port)
+        if self.settings.web_port is not None:
+            web.serve(self, self.settings.web_port, self.settings.web_author_header)
         while True:
             started = time.time()
             try:

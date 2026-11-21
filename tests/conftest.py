@@ -217,17 +217,15 @@ def _finding(cve: str, kind: str, target: str, package: str, severity: str = "hi
     )
 
 
-def serve(
-    fake_http: FakeHttp,
+def fake_app(
     vex_dir: Path,
     *findings: tuple[str, ...],
     kev: Mapping[str, Exploited] | None = None,
     matched: float | None = 1000.0,
-) -> None:
-    """The app's /metrics with these findings, (cve, kind, target, package[, severity[, fixed version]]: high
-    and no fix without them), matched at matched (None: not yet), and assessed by its collector from the
-    documents in vex_dir as they are at each request."""
-    app = SimpleNamespace(
+) -> SimpleNamespace:
+    """The app with these findings, (cve, kind, target, package[, severity[, fixed version]]: high and no fix
+    without them), matched at matched (None: not yet), and its verdicts in vex_dir."""
+    return SimpleNamespace(
         findings=[_finding(*finding) for finding in findings],
         kev=SimpleNamespace(data=kev or {}),
         cwe=SimpleNamespace(data={}),
@@ -240,6 +238,18 @@ def serve(
         feeds=(),
         last_match_success=matched,
     )
+
+
+def serve(
+    fake_http: FakeHttp,
+    vex_dir: Path,
+    *findings: tuple[str, ...],
+    kev: Mapping[str, Exploited] | None = None,
+    matched: float | None = 1000.0,
+) -> None:
+    """The /metrics of fake_app(vex_dir, *findings, kev=kev, matched=matched), assessed by its collector from
+    the documents in vex_dir as they are at each request."""
+    app = fake_app(vex_dir, *findings, kev=kev, matched=matched)
 
     def page(url: str) -> http.Response:
         registry = CollectorRegistry()

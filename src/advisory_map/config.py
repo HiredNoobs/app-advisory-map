@@ -38,6 +38,10 @@ class Settings:
     # Verdicts on findings, as OpenVEX documents: see docs/vex.md.
     vex_dir: Path | None
     listen_port: int
+    # The verdicts page's own port (None: not served), and the header its authenticating proxy says who's
+    # saving in (None: the form asks): see docs/vex.md.
+    web_port: int | None
+    web_author_header: str | None
     match_interval: int
     feed_refresh: int
     # FEED_REFRESH_<FEED> overrides, by feed name.
@@ -45,6 +49,8 @@ class Settings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "Settings":
+        if env.get("WEB_PORT") and not env.get("VEX_DIR"):
+            raise ValueError("WEB_PORT needs VEX_DIR: the page saves verdicts there")
         return cls(
             prometheus_url=_required(env, "PROMETHEUS_URL").rstrip("/"),
             prometheus_ca_file=env.get("PROMETHEUS_CA_FILE") or None,
@@ -54,6 +60,8 @@ class Settings:
             data_dir=Path(env.get("DATA_DIR", "/data")),
             vex_dir=Path(env["VEX_DIR"]) if env.get("VEX_DIR") else None,
             listen_port=int(env.get("LISTEN_PORT", "8080")),
+            web_port=int(env["WEB_PORT"]) if env.get("WEB_PORT") else None,
+            web_author_header=env.get("WEB_AUTHOR_HEADER") or None,
             match_interval=parse_duration(env.get("MATCH_INTERVAL", "15m")),
             feed_refresh=parse_duration(env.get("FEED_REFRESH", "24h")),
             feed_refresh_overrides={
