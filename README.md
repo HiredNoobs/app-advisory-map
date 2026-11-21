@@ -29,7 +29,7 @@ ADP) or GitHub's level in OSV, whichever was updated last, else Debian's urgency
 Whether a finding matters where it runs (a vulnerable feature that's turned off, say) is for you to
 judge: [verdicts](docs/vex.md) record it as OpenVEX statements in `VEX_DIR`, and each finding carries
 its assessment. `advisory-map vex`, run in the app's container, lists the findings and adds verdicts,
-on the command line or in a terminal UI.
+on the command line or in a terminal UI; a page served behind an authenticating proxy adds them too.
 
 ## Requirements
 
@@ -73,6 +73,8 @@ report the running images it doesn't cover.
 | `DATA_DIR` | `/data` | the feeds' copies |
 | `VEX_DIR` | (none) | the [verdicts](docs/vex.md), OpenVEX documents |
 | `LISTEN_PORT` | `8080` | `/metrics` |
+| `WEB_PORT` | (none) | the [verdicts page](docs/vex.md#the-page), on a port of its own; needs `VEX_DIR` |
+| `WEB_AUTHOR_HEADER` | (none) | the header an authenticating proxy says who's saving in (e.g. `Remote-User`); without it the page asks |
 | `MATCH_INTERVAL` | `15m` | how often versions are read and matched |
 | `FEED_REFRESH` | `24h` | how often the feeds are refreshed (conditional GETs, git fetches, changed records) |
 | `FEED_REFRESH_<FEED>` | `FEED_REFRESH` | per feed: `DEBIAN`, `CVELIST`, `OSV`, `KEV`, `CWE`, `RELEASES` |
@@ -98,7 +100,7 @@ The package `advisory_map` (tests mirror it):
 - `common/`: HTTP and streamed JSON.
 - `vex/`: the verdicts, `openvex.py` reading and writing their documents, `assess.py` which applies to each finding, `expiry.py` when it no longer holds.
 - `app.py` the match loop, `findings.py` its result, `metrics.py` `/metrics`, `config.py` the settings.
-- `cli.py` `advisory-map vex`, `tui.py` its terminal UI.
+- `cli.py` `advisory-map vex`, `tui.py` its terminal UI, `web.py` the verdicts page.
 
 ```sh
 python -m venv venv && . venv/bin/activate

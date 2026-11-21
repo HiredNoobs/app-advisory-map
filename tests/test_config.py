@@ -25,6 +25,21 @@ def test_defaults() -> None:
     assert settings.mapping_file is None
     assert settings.cvelist_url == "https://github.com/CVEProject/cvelistV5.git"
     assert settings.vex_dir is None
+    assert settings.web_port is None and settings.web_author_header is None
+
+
+def test_the_verdicts_page() -> None:
+    settings = Settings.from_env(
+        {
+            "PROMETHEUS_URL": "http://prometheus:9090",
+            "VEX_DIR": "/vex",
+            "WEB_PORT": "8081",
+            "WEB_AUTHOR_HEADER": "Remote-User",
+        }
+    )
+    assert (settings.web_port, settings.web_author_header) == (8081, "Remote-User")
+    with pytest.raises(ValueError, match="WEB_PORT needs VEX_DIR"):
+        Settings.from_env({"PROMETHEUS_URL": "http://prometheus:9090", "WEB_PORT": "8081"})
 
 
 def test_vex_dir() -> None:

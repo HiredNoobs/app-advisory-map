@@ -1,9 +1,12 @@
 """Which verdict applies to each finding: the latest statement naming its vulnerability and covering its
 installation."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import NamedTuple
 
+from advisory_map.advisories.kev import Exploited
 from advisory_map.findings import Finding
+from advisory_map.vex.expiry import Seen, expired
 from advisory_map.vex.openvex import Statement, product
 
 
@@ -40,3 +43,24 @@ def assessment(statement: Statement | None, expired: bool = False) -> tuple[str,
     if statement is None:
         return "unassessed", ""
     return "expired" if expired else statement.status, statement.justification
+
+
+class Assessed(NamedTuple):
+    finding: Finding
+    # The verdict that applies to it, None without one.
+    statement: Statement | None
+    assessment: str
+    justification: str
+
+
+def assessed(
+    findings: Sequence[Finding], statements: Iterable[Statement], seen: Seen, kev: Mapping[str, Exploited]
+) -> tuple[list[Assessed], list[Statement]]:
+    """Each finding with its verdict and assessment, expired once the verdict no longer holds; and the
+    statements that match no finding."""
+    decided, unmatched = assess(findings, statements)
+    items = []
+    for finding, statement in zip(findings, decided):
+        stale = statement is not None and expired(statement, finding, seen, kev)
+        items.append(Assessed(finding, statement, *assessment(statement, stale)))
+    return items, unmatched
